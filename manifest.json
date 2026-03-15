@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "SideChat",
+  "version": "1.0.0",
+  "description": "Ephemeral side-conversations for ChatGPT. Explore tangents without polluting your main chat.",
+
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "activeTab",
+    "contextMenus"
+  ],
+
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["utils/dom-reader.js", "content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_title": "Open SideChat",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+
+  "commands": {
+    "_execute_side_panel": {
+      "suggested_key": {
+        "mac": "Command+Shift+S",
+        "default": "Ctrl+Shift+S"
+      },
+      "description": "Open SideChat"
+    }
+  },
+
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  }
+}

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SideChat</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header id="header">
+    <h1>SideChat</h1>
+    <select id="model-select" title="Select model" aria-label="Select model"></select>
+    <div id="header-actions">
+      <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Open settings">
+        <!-- Gear icon -->
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Context preview card ─────────────────────────────────────────── -->
+  <div id="context-card" aria-label="Conversation context">
+    <div id="context-header" role="button" tabindex="0" aria-expanded="false" aria-controls="context-body">
+      <span id="context-toggle-icon" aria-hidden="true">▶</span>
+      <span id="context-summary">Loading conversation…</span>
+      <span id="context-token-count"></span>
+    </div>
+    <div id="context-body" role="region" aria-label="Full context">
+      <div id="context-messages"></div>
+    </div>
+  </div>
+
+  <!-- ── Stale context banner ──────────────────────────────────────────── -->
+  <div id="stale-banner" role="alert" aria-live="polite">
+    <span>Main conversation has new messages.</span>
+    <button id="refresh-context-btn">Refresh context</button>
+  </div>
+
+  <!-- ── Empty / error states ─────────────────────────────────────────── -->
+  <div id="empty-state" role="status">
+    <p id="empty-state-msg"></p>
+    <button class="btn btn-primary hidden" id="empty-settings-btn">Open Settings</button>
+  </div>
+
+  <!-- ── Messages area ─────────────────────────────────────────────────── -->
+  <main id="messages-area" aria-label="Side chat messages" aria-live="polite"></main>
+
+  <!-- ── Summary preview card ─────────────────────────────────────────── -->
+  <div id="summary-card" aria-label="Summary preview">
+    <h3>Summary Preview</h3>
+    <p id="summary-generating" class="hidden">Generating summary…</p>
+    <textarea id="summary-textarea" class="hidden" rows="4" aria-label="Editable summary text" placeholder="Summary will appear here…"></textarea>
+    <div id="summary-actions" class="hidden">
+      <button class="btn btn-primary" id="paste-summary-btn">Paste into ChatGPT</button>
+      <button class="btn btn-ghost" id="copy-summary-btn">Copy</button>
+      <button class="btn btn-ghost" id="cancel-summary-btn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ── Action bar ────────────────────────────────────────────────────── -->
+  <div id="action-bar">
+    <button class="btn btn-primary" id="inject-btn" disabled>Inject Summary</button>
+    <button class="btn btn-ghost" id="clear-btn" disabled>Clear Chat</button>
+  </div>
+
+  <!-- ── Input area ────────────────────────────────────────────────────── -->
+  <div id="input-area">
+    <textarea
+      id="chat-input"
+      placeholder="Ask a side question…"
+      rows="1"
+      aria-label="Side chat input"
+      disabled
+    ></textarea>
+    <button class="btn btn-icon" id="send-btn" disabled aria-label="Send message">
+      <!-- Send icon -->
+      <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/>
+      </svg>
+    </button>
+  </div>
+
+</div>
+
+<!-- ── Toast container ───────────────────────────────────────────────── -->
+<div id="toast-container" aria-live="polite"></div>
+
+<script src="sidepanel.js"></script>
+</body>
+</html>

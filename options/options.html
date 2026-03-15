@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SideChat Settings</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --bg: #ffffff;
+      --bg-secondary: #f7f7f8;
+      --border: #e5e7eb;
+      --text: #111827;
+      --text-muted: #6b7280;
+      --accent: #2563eb;
+      --radius: 8px;
+      --radius-sm: 4px;
+      --error: #dc2626;
+      --success: #16a34a;
+      --error-bg: #fef2f2;
+      --success-bg: #f0fdf4;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a1a1a;
+        --bg-secondary: #242424;
+        --border: #333333;
+        --text: #f9fafb;
+        --text-muted: #9ca3af;
+        --error-bg: #2d1515;
+        --success-bg: #142d14;
+      }
+    }
+
+    body {
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      background: var(--bg);
+      padding: 24px;
+      max-width: 600px;
+      margin: 0 auto;
+      line-height: 1.5;
+    }
+
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+
+    .page-subtitle {
+      color: var(--text-muted);
+      font-size: 13px;
+      margin-bottom: 28px;
+    }
+
+    section {
+      margin-bottom: 28px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-secondary);
+    }
+
+    .privacy-note {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 12px;
+      padding: 8px 10px;
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Add key form ── */
+    .add-key-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--text-muted);
+      min-width: 80px;
+      flex-shrink: 0;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select,
+    textarea {
+      font-family: var(--font);
+      font-size: 13px;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      width: 100%;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 6px 14px;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+    .btn-ghost { background: none; color: var(--text-muted); border-color: var(--border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--bg); color: var(--text); }
+    .btn-danger { background: none; color: var(--error); border-color: var(--error); }
+    .btn-danger:hover:not(:disabled) { background: var(--error-bg); }
+
+    /* ── API Keys list ── */
+    #keys-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .key-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      flex-wrap: wrap;
+    }
+
+    .key-provider {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: var(--bg-secondary);
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .key-masked {
+      font-family: monospace;
+      font-size: 13px;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .key-status {
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .key-status.ok { color: var(--success); }
+    .key-status.fail { color: var(--error); }
+
+    .key-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .no-keys-msg {
+      color: var(--text-muted);
+      font-size: 13px;
+      font-style: italic;
+      margin-bottom: 12px;
+    }
+
+    /* ── Slider ── */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+    }
+
+    .slider-value {
+      min-width: 32px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Toggle ── */
+    .toggle-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    .toggle-btn {
+      padding: 6px 14px;
+      font-family: var(--font);
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      background: none;
+      color: var(--text-muted);
+      transition: all 0.15s;
+    }
+
+    .toggle-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    /* ── Saved indicator ── */
+    #saved-indicator {
+      display: none;
+      color: var(--success);
+      font-size: 13px;
+      margin-top: 12px;
+    }
+
+    #saved-indicator.visible { display: block; }
+
+    /* ── Divider ── */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>SideChat Settings</h1>
+  <p class="page-subtitle">Configure your API keys and preferences.</p>
+
+  <!-- ── API Keys ─────────────────────────────────────────────────────── -->
+  <section>
+    <h2>API Keys</h2>
+
+    <div id="keys-list"></div>
+
+    <hr class="divider" />
+
+    <div class="add-key-form">
+      <div class="form-row">
+        <label for="provider-select">Provider</label>
+        <select id="provider-select">
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="api-key-input">API Key</label>
+        <input type="password" id="api-key-input" placeholder="sk-…" autocomplete="off" />
+      </div>
+      <div>
+        <button class="btn btn-primary" id="add-key-btn">Save Key</button>
+        <span id="add-key-status" style="font-size:13px;margin-left:10px;"></span>
+      </div>
+    </div>
+
+    <p class="privacy-note">
+      Your key is stored locally in your browser. It is never sent to any server other than the AI provider's API.
+    </p>
+  </section>
+
+  <!-- ── Preferences ───────────────────────────────────────────────────── -->
+  <section>
+    <h2>Preferences</h2>
+
+    <div style="display:flex;flex-direction:column;gap:14px;">
+
+      <div>
+        <label style="display:block;margin-bottom:6px;">Default model</label>
+        <select id="default-model-select" style="max-width:250px;"></select>
+      </div>
+
+      <div>
+        <label style="display:block;margin-bottom:6px;">
+          Max context messages: <span id="max-context-value">20</span> pairs
+        </label>
+        <div class="slider-row">
+          <input type="range" id="max-context-slider" min="5" max="20" step="1" value="20" />
+        </div>
+      </div>
+
+      <div>
+        <label style="display:block;margin-bottom:6px;">Summary style</label>
+        <div class="toggle-group">
+          <button class="toggle-btn active" data-style="concise">Concise (1–2 sentences)</button>
+          <button class="toggle-btn" data-style="detailed">Detailed (2–4 sentences)</button>
+        </div>
+      </div>
+
+    </div>
+
+    <p id="saved-indicator">Settings saved.</p>
+  </section>
+
+  <script src="options.js"></script>
+</body>
+</html>
