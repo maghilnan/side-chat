@@ -16,10 +16,18 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// ── Helper: detect ChatGPT tabs ──────────────────────────────────────────
+
+function isChatGPTTab(url) {
+  return url?.includes('chatgpt.com') || url?.includes('chat.openai.com');
+}
+
 // ── Open side panel on icon click ────────────────────────────────────────
 
 chrome.action.onClicked.addListener(async (tab) => {
-  await chrome.sidePanel.open({ tabId: tab.id });
+  if (isChatGPTTab(tab.url)) {
+    await chrome.sidePanel.open({ tabId: tab.id });
+  }
 });
 
 // ── Open side panel on context menu click ────────────────────────────────
@@ -208,3 +216,27 @@ async function getActiveChatGPTTab() {
   );
   return chatTab?.id || null;
 }
+
+// ── Auto-enable/disable side panel based on active tab URL ────────────────
+
+async function updatePanelForTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.sidePanel.setOptions({
+      tabId,
+      enabled: isChatGPTTab(tab.url),
+    });
+  } catch (e) {
+    // Tab may have been closed
+  }
+}
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  updatePanelForTab(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === 'complete') {
+    updatePanelForTab(tabId);
+  }
+});
