@@ -15,6 +15,7 @@ const state = {
   apiPort: null,          // long-lived port for streaming
   panelPort: null,        // long-lived port for panel <-> background
   summaryVisible: false,
+  pendingSelectedText: null,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -22,34 +23,38 @@ const state = {
 const $ = id => document.getElementById(id);
 
 const dom = {
-  contextCard:       $('context-card'),
-  contextHeader:     $('context-header'),
-  contextToggleIcon: $('context-toggle-icon'),
-  contextSummary:    $('context-summary'),
-  contextTokenCount: $('context-token-count'),
-  contextBody:       $('context-body'),
-  contextMessages:   $('context-messages'),
-  staleBanner:       $('stale-banner'),
-  refreshContextBtn: $('refresh-context-btn'),
-  emptyState:        $('empty-state'),
-  emptyStateMsg:     $('empty-state-msg'),
-  emptySettingsBtn:  $('empty-settings-btn'),
-  messagesArea:      $('messages-area'),
-  summaryCard:       $('summary-card'),
-  summaryGenerating: $('summary-generating'),
-  summaryTextarea:   $('summary-textarea'),
-  summaryActions:    $('summary-actions'),
-  pasteBtn:          $('paste-summary-btn'),
-  copyBtn:           $('copy-summary-btn'),
-  cancelSummaryBtn:  $('cancel-summary-btn'),
-  actionBar:         $('action-bar'),
-  injectBtn:         $('inject-btn'),
-  clearBtn:          $('clear-btn'),
-  chatInput:         $('chat-input'),
-  sendBtn:           $('send-btn'),
-  modelSelect:       $('model-select'),
-  settingsBtn:       $('settings-btn'),
-  toastContainer:    $('toast-container'),
+  contextCard:              $('context-card'),
+  contextHeader:            $('context-header'),
+  contextToggleIcon:        $('context-toggle-icon'),
+  contextSummary:           $('context-summary'),
+  contextBody:              $('context-body'),
+  contextMessages:          $('context-messages'),
+  staleBanner:              $('stale-banner'),
+  refreshContextBtn:        $('refresh-context-btn'),
+  emptyState:               $('empty-state'),
+  emptyStateMsg:            $('empty-state-msg'),
+  emptySettingsBtn:         $('empty-settings-btn'),
+  messagesArea:             $('messages-area'),
+  summaryCard:              $('summary-card'),
+  summaryGenerating:        $('summary-generating'),
+  summaryTextarea:          $('summary-textarea'),
+  summaryActions:           $('summary-actions'),
+  pasteBtn:                 $('paste-summary-btn'),
+  copyBtn:                  $('copy-summary-btn'),
+  cancelSummaryBtn:         $('cancel-summary-btn'),
+  bottomBar:                $('bottom-bar'),
+  injectBtn:                $('inject-btn'),
+  clearBtn:                 $('clear-btn'),
+  inputArea:                $('input-area'),
+  inputWrapper:             $('input-wrapper'),
+  selectedTextChip:         $('selected-text-chip'),
+  selectedTextChipLabel:    $('selected-text-chip-label'),
+  selectedTextChipDismiss:  $('selected-text-chip-dismiss'),
+  chatInput:                $('chat-input'),
+  sendBtn:                  $('send-btn'),
+  modelSelect:              $('model-select'),
+  settingsBtn:              $('settings-btn'),
+  toastContainer:           $('toast-container'),
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────
@@ -161,7 +166,6 @@ function populateModelDropdown() {
 
 async function loadContext() {
   dom.contextSummary.textContent = 'Reading conversation…';
-  dom.contextTokenCount.textContent = '';
 
   try {
     const resp = await chrome.runtime.sendMessage({
@@ -196,7 +200,7 @@ async function loadContext() {
 }
 
 function renderContextPreview() {
-  const { messages, tokenEstimate, truncated } = state.context;
+  const { messages, truncated } = state.context;
 
   // Summary line
   const firstUserMsg = messages.find(m => m.role === 'user');
@@ -204,10 +208,6 @@ function renderContextPreview() {
     ? firstUserMsg.content.slice(0, 60).replace(/\n/g, ' ') + (firstUserMsg.content.length > 60 ? '…' : '')
     : 'Conversation loaded';
   dom.contextSummary.textContent = `${preview} (${messages.length} messages)`;
-
-  // Token count
-  const tokenK = (tokenEstimate / 1000).toFixed(1);
-  dom.contextTokenCount.textContent = `~${tokenK}K tokens`;
 
   // Full context messages
   dom.contextMessages.textContent = '';
@@ -221,7 +221,7 @@ function renderContextPreview() {
 
   messages.forEach(m => {
     const msgEl = document.createElement('div');
-    msgEl.className = 'ctx-msg';
+    msgEl.className = `ctx-msg ctx-msg--${m.role}`;
 
     const contentEl = document.createElement('div');
     contentEl.className = 'ctx-msg-content';
@@ -240,7 +240,6 @@ function showContextError(errType) {
     unknown: 'Couldn\'t read the conversation. Try refreshing the page.',
   };
   dom.contextSummary.textContent = messages[errType] || messages.unknown;
-  dom.contextTokenCount.textContent = '';
   // Still allow chat in "no_messages" case (empty context)
   if (errType === 'no_messages') {
     state.context = { messages: [], tokenEstimate: 0, truncated: false };
@@ -255,8 +254,8 @@ function showEmptyState(type) {
   dom.emptyState.classList.add('visible');
   dom.contextCard.classList.add('hidden');
   dom.messagesArea.classList.add('hidden');
-  dom.actionBar.classList.add('hidden');
-  dom.inputArea?.classList.add('hidden');
+  dom.bottomBar.classList.add('hidden');
+  dom.inputArea.classList.add('hidden');
 
   if (type === 'no_api_key') {
     dom.emptyStateMsg.textContent = 'Add your API key in settings to get started.';
@@ -285,8 +284,8 @@ function setInputLocked(locked) {
 // ── Sending messages ──────────────────────────────────────────────────────
 
 async function sendMessage() {
-  const text = dom.chatInput.value.trim();
-  if (!text || state.streaming) return;
+  const inputText = dom.chatInput.value.trim();
+  if (!inputText || state.streaming) return;
 
   const keyInfo = getActiveApiKey();
   if (!keyInfo) {
@@ -294,8 +293,13 @@ async function sendMessage() {
     return;
   }
 
+  const text = state.pendingSelectedText
+    ? `"${state.pendingSelectedText}"\n\n${inputText}`
+    : inputText;
+
   dom.chatInput.value = '';
   autoResizeTextarea();
+  dismissSelectedTextChip();
 
   // Add user message to state and UI
   state.sideMessages.push({ role: 'user', content: text });
@@ -625,6 +629,7 @@ function clearChat() {
   dom.injectBtn.disabled = true;
   dom.clearBtn.disabled = true;
   hideSummaryCard();
+  dismissSelectedTextChip();
   scrollToBottom();
 }
 
@@ -669,7 +674,6 @@ async function handleNewConversation() {
   dom.contextToggleIcon.classList.remove('expanded');
   dom.contextHeader.setAttribute('aria-expanded', 'false');
   dom.contextSummary.textContent = 'New conversation — refreshing context…';
-  dom.contextTokenCount.textContent = '';
   dom.contextMessages.textContent = '';
 
   // Wait briefly for ChatGPT's SPA to finish rendering the new page
@@ -681,8 +685,10 @@ async function handleNewConversation() {
 
 function handleSelectedText(text) {
   if (!text) return;
-  // Pre-populate the input with a quote of the selected passage
-  dom.chatInput.value = `"${text}"\n\n`;
+  state.pendingSelectedText = text;
+  dom.selectedTextChipLabel.textContent = `"${text}"`;
+  dom.selectedTextChip.classList.remove('hidden');
+  dom.chatInput.value = '';
   autoResizeTextarea();
   // Position cursor at the end so user can type their question.
   // Use a small delay so the panel window has time to receive focus
@@ -763,6 +769,9 @@ function wireEvents() {
   dom.copyBtn.addEventListener('click', handleCopySummary);
   dom.cancelSummaryBtn.addEventListener('click', hideSummaryCard);
 
+  // Chip dismiss
+  dom.selectedTextChipDismiss.addEventListener('click', dismissSelectedTextChip);
+
   // Empty state settings
   dom.emptySettingsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage());
 
@@ -781,7 +790,7 @@ function wireEvents() {
       dom.emptyState.classList.remove('visible');
       dom.contextCard.classList.remove('hidden');
       dom.messagesArea.classList.remove('hidden');
-      dom.actionBar.classList.remove('hidden');
+      dom.bottomBar.classList.remove('hidden');
       await loadContext();
     }
   });
