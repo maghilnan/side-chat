@@ -223,15 +223,10 @@ function renderContextPreview() {
     const msgEl = document.createElement('div');
     msgEl.className = 'ctx-msg';
 
-    const roleEl = document.createElement('div');
-    roleEl.className = 'ctx-msg-role';
-    roleEl.textContent = m.role === 'user' ? 'You' : 'Assistant';
-
     const contentEl = document.createElement('div');
     contentEl.className = 'ctx-msg-content';
     contentEl.textContent = m.content;
 
-    msgEl.appendChild(roleEl);
     msgEl.appendChild(contentEl);
     dom.contextMessages.appendChild(msgEl);
   });
