@@ -121,8 +121,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Panel not open — stash text, open panel; panel will fetch it on init
       pendingSelectedTexts.set(tabId, selectedText);
     }
-    // sidePanel.open() requires a user gesture context and cannot be called
-    // from a message handler — text is stashed above and delivered on next open.
+    chrome.sidePanel.setOptions({ tabId, enabled: true })
+      .then(() => chrome.sidePanel.open({ tabId }))
+      .catch(() => {});
     return false;
   }
 
