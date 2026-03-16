@@ -496,6 +496,7 @@ async function handlePasteSummary() {
   if (resp?.success) {
     showToast('Summary pasted into ChatGPT. Press Enter in ChatGPT to send.', 'success');
     hideSummaryCard();
+    dismissSelectedTextChip();
   } else {
     // Fallback: copy to clipboard
     try {
@@ -505,6 +506,7 @@ async function handlePasteSummary() {
       showToast('Couldn\'t paste or copy. Please copy the text manually.', 'error');
     }
     hideSummaryCard();
+    dismissSelectedTextChip();
   }
 }
 
@@ -523,6 +525,14 @@ function hideSummaryCard() {
   dom.summaryTextarea.value = '';
   dom.injectBtn.disabled = state.sideMessages.length === 0;
   state.summaryVisible = false;
+}
+
+function dismissSelectedTextChip() {
+  // Clear any selected-text content that was pre-populated into the input
+  // when the user clicked "Ask SideChat". This prevents stale quoted text
+  // from remaining in the input after the summary workflow is complete.
+  dom.chatInput.value = '';
+  autoResizeTextarea();
 }
 
 // ── Clear chat ────────────────────────────────────────────────────────────
@@ -593,9 +603,13 @@ function handleSelectedText(text) {
   // Pre-populate the input with a quote of the selected passage
   dom.chatInput.value = `"${text}"\n\n`;
   autoResizeTextarea();
-  // Position cursor at the end so user can type their question
-  dom.chatInput.focus();
-  dom.chatInput.setSelectionRange(dom.chatInput.value.length, dom.chatInput.value.length);
+  // Position cursor at the end so user can type their question.
+  // Use a small delay so the panel window has time to receive focus
+  // before the focus() call is made (needed when the panel was just opened).
+  setTimeout(() => {
+    dom.chatInput.focus();
+    dom.chatInput.setSelectionRange(dom.chatInput.value.length, dom.chatInput.value.length);
+  }, 100);
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
