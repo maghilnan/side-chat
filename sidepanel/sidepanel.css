@@ -237,13 +237,6 @@ body {
   }
 }
 
-#context-messages .ctx-msg-role {
-  font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 3px;
-}
 
 #context-messages .ctx-msg-content {
   white-space: pre-wrap;
