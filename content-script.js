@@ -105,6 +105,10 @@
     outerDiv.appendChild(span);
     btn.appendChild(outerDiv);
 
+    // Prevent mousedown from clearing the text selection before we can read it
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
