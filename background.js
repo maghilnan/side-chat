@@ -26,6 +26,7 @@ function isChatGPTTab(url) {
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (isChatGPTTab(tab.url)) {
+    await chrome.sidePanel.setOptions({ tabId: tab.id, enabled: true });
     await chrome.sidePanel.open({ tabId: tab.id });
   }
 });
@@ -34,6 +35,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'open-sidechat') {
+    await chrome.sidePanel.setOptions({ tabId: tab.id, enabled: true });
     await chrome.sidePanel.open({ tabId: tab.id });
   }
 });
@@ -119,7 +121,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Panel not open — stash text, open panel; panel will fetch it on init
       pendingSelectedTexts.set(tabId, selectedText);
     }
-    chrome.sidePanel.open({ tabId }).catch(() => {});
+    chrome.sidePanel.setOptions({ tabId, enabled: true })
+      .then(() => chrome.sidePanel.open({ tabId }))
+      .catch(() => {});
     return false;
   }
 
