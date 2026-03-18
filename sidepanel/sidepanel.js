@@ -12,6 +12,7 @@ const state = {
   sideMessages: [],       // [{role, content}] — current side conversation
   streaming: false,       // whether a stream is in progress
   tabId: null,            // active ChatGPT tab ID
+  windowId: null,         // window ID of the active tab
   apiPort: null,          // long-lived port for streaming
   panelPort: null,        // long-lived port for panel <-> background
   summaryVisible: false,
@@ -52,26 +53,52 @@ const dom = {
   selectedTextChipDismiss:  $('selected-text-chip-dismiss'),
   chatInput:                $('chat-input'),
   sendBtn:                  $('send-btn'),
-  modelSelect:              $('model-select'),
   settingsBtn:              $('settings-btn'),
   toastContainer:           $('toast-container'),
 };
+
+// ── Port management ───────────────────────────────────────────────────────
+
+let isFirstConnect = true;
+
+function connectPanelPort() {
+  if (!chrome.runtime?.id) return; // extension context invalidated — stop
+  try {
+    const port = chrome.runtime.connect({ name: 'sidepanel' });
+    state.panelPort = port;
+    port.onMessage.addListener(handleBackgroundPortMessage);
+    port.onDisconnect.addListener(() => {
+      state.panelPort = null;
+      // SW may have restarted; reconnect to restore message routing
+      setTimeout(connectPanelPort, 100);
+    });
+    if (state.tabId) {
+      port.postMessage({ type: 'REGISTER_TAB', tabId: state.tabId, windowId: state.windowId });
+    }
+    // On reconnects (not first connect), check for pending text stashed while port was down
+    if (!isFirstConnect && state.tabId && state.settings) {
+      chrome.runtime.sendMessage({ type: 'GET_PENDING_TEXT', tabId: state.tabId })
+        .then(resp => { if (resp?.text) handleSelectedText(resp.text); })
+        .catch(() => {});
+    }
+    isFirstConnect = false;
+  } catch { /* extension context invalidated */ }
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────
 
 async function init() {
   // Connect long-lived port to background for CONTEXT_STALE notifications
-  state.panelPort = chrome.runtime.connect({ name: 'sidepanel' });
-  state.panelPort.onMessage.addListener(handleBackgroundPortMessage);
-  state.panelPort.onDisconnect.addListener(() => { state.panelPort = null; });
+  connectPanelPort();
 
   // Get active tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   state.tabId = tab?.id || null;
+  state.windowId = tab?.windowId || null;
 
-  // Register tab with background
+  // Register tab with background (connectPanelPort was called before tabId was resolved)
   if (state.panelPort && state.tabId) {
-    state.panelPort.postMessage({ type: 'REGISTER_TAB', tabId: state.tabId });
+    state.panelPort.postMessage({ type: 'REGISTER_TAB', tabId: state.tabId, windowId: state.windowId });
   }
 
   // Notify background that panel is ready (triggers PANEL_OPENED in content script)
@@ -81,7 +108,6 @@ async function init() {
 
   // Load settings
   state.settings = await loadSettings();
-  populateModelDropdown();
 
   const hasKey = getActiveApiKey();
 
@@ -125,41 +151,17 @@ async function loadSettings() {
 
 function getActiveApiKey() {
   if (!state.settings?.apiKeys?.length) return null;
-  const selected = dom.modelSelect.value;
-  if (selected) {
-    const [provider, model] = selected.split('|');
+  if (state.settings.defaultModel) {
+    const [provider, model] = state.settings.defaultModel.split('|');
     const key = state.settings.apiKeys.find(k => k.provider === provider);
     if (key) return { apiKey: key.key, provider, model };
   }
   const first = state.settings.apiKeys[0];
-  return first ? { apiKey: first.key, provider: first.provider, model: first.defaultModel || getDefaultModel(first.provider) } : null;
+  return first ? { apiKey: first.key, provider: first.provider, model: getDefaultModel(first.provider) } : null;
 }
 
 function getDefaultModel(provider) {
   return provider === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o';
-}
-
-function populateModelDropdown() {
-  dom.modelSelect.textContent = '';
-  const keys = state.settings?.apiKeys || [];
-  if (!keys.length) {
-    const opt = document.createElement('option');
-    opt.textContent = 'No API key';
-    dom.modelSelect.appendChild(opt);
-    return;
-  }
-  keys.forEach(k => {
-    const models = k.provider === 'anthropic'
-      ? ['claude-sonnet-4-20250514', 'claude-opus-4-5', 'claude-haiku-4-5-20251001']
-      : ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
-    models.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = `${k.provider}|${m}`;
-      opt.textContent = m;
-      if (state.settings.defaultModel === `${k.provider}|${m}`) opt.selected = true;
-      dom.modelSelect.appendChild(opt);
-    });
-  });
 }
 
 // ── Context loading ───────────────────────────────────────────────────────
@@ -225,8 +227,8 @@ function renderContextPreview() {
 
     const contentEl = document.createElement('div');
     contentEl.className = 'ctx-msg-content';
-    contentEl.textContent = m.content;
-
+    // renderMarkdown HTML-escapes all content before applying markdown tags — XSS-safe
+    contentEl.innerHTML = renderMarkdown(m.content); // nosec: renderMarkdown pre-escapes HTML
     msgEl.appendChild(contentEl);
     dom.contextMessages.appendChild(msgEl);
   });
@@ -260,7 +262,10 @@ function showEmptyState(type) {
   if (type === 'no_api_key') {
     dom.emptyStateMsg.textContent = 'Add your API key in settings to get started.';
     dom.emptySettingsBtn.classList.remove('hidden');
-    dom.emptySettingsBtn.onclick = () => chrome.runtime.openOptionsPage();
+    dom.emptySettingsBtn.onclick = () => SettingsPanel.open();
+  } else if (type === 'no_chatgpt_tab') {
+    dom.emptyStateMsg.textContent = 'Navigate to chatgpt.com to use SideChat.';
+    dom.emptySettingsBtn.classList.add('hidden');
   }
 }
 
@@ -268,6 +273,10 @@ function showEmptyState(type) {
 
 function enableChatUI() {
   dom.emptyState.classList.remove('visible');
+  dom.contextCard.classList.remove('hidden');
+  dom.messagesArea.classList.remove('hidden');
+  dom.bottomBar.classList.remove('hidden');
+  dom.inputArea.classList.remove('hidden');
   dom.chatInput.disabled = false;
   dom.sendBtn.disabled = false;
   dom.chatInput.focus();
@@ -412,6 +421,61 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+function processLists(html) {
+  const lines = html.split('\n');
+  const out = [];
+  let listType = null; // 'ol' or 'ul'
+  let listItems = [];
+
+  function flushList() {
+    if (!listType) return;
+    const items = listItems.map(i => `<li>${i}</li>`).join('');
+    out.push(`<${listType}>${items}</${listType}>`);
+    listType = null;
+    listItems = [];
+  }
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const olMatch = line.match(/^\d+\. (.+)/);
+    const ulMatch = line.match(/^[-*] (.+)/);
+
+    if (olMatch) {
+      if (listType === 'ul') flushList();
+      listType = 'ol';
+      listItems.push(olMatch[1]);
+      i++;
+    } else if (ulMatch) {
+      if (listType === 'ol') flushList();
+      listType = 'ul';
+      listItems.push(ulMatch[1]);
+      i++;
+    } else if (line.trim() === '' && listType) {
+      // Blank line inside a list — peek ahead to see if it's a loose list
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === '') j++;
+      const nextLine = j < lines.length ? lines[j] : '';
+      const continuesList =
+        (listType === 'ol' && /^\d+\. /.test(nextLine)) ||
+        (listType === 'ul' && /^[-*] /.test(nextLine));
+      if (continuesList) {
+        i = j; // skip blank lines, stay in current list
+      } else {
+        flushList();
+        out.push(line);
+        i++;
+      }
+    } else {
+      flushList();
+      out.push(line);
+      i++;
+    }
+  }
+  flushList();
+  return out.join('\n');
+}
+
 /**
  * Converts markdown text to an HTML string.
  * XSS-safe: all user content is HTML-escaped before any markdown tags are applied.
@@ -449,21 +513,8 @@ function renderMarkdown(text) {
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
   html = html.replace(/_(.+?)_/g, '<em>$1</em>');
 
-  // Step 7: Unordered lists — collect consecutive lines starting with "- " or "* "
-  html = html.replace(/((?:^[-*] .+\n?)+)/gm, (match) => {
-    const items = match.trim().split('\n').map(line =>
-      `<li>${line.replace(/^[-*] /, '')}</li>`
-    ).join('');
-    return `<ul>${items}</ul>`;
-  });
-
-  // Step 8: Ordered lists — collect consecutive lines starting with "N. "
-  html = html.replace(/((?:^\d+\. .+\n?)+)/gm, (match) => {
-    const items = match.trim().split('\n').map(line =>
-      `<li>${line.replace(/^\d+\. /, '')}</li>`
-    ).join('');
-    return `<ol>${items}</ol>`;
-  });
+  // Steps 7 & 8: Unordered and ordered lists
+  html = processLists(html);
 
   // Step 9: Wrap remaining content in paragraphs; double newlines = new paragraph
   const blockTagRe = /^<(h[1-3]|ul|ol|li|blockquote|pre|p)/;
@@ -613,9 +664,10 @@ function hideSummaryCard() {
 }
 
 function dismissSelectedTextChip() {
-  // Clear any selected-text content that was pre-populated into the input
-  // when the user clicked "Ask SideChat". This prevents stale quoted text
-  // from remaining in the input after the summary workflow is complete.
+  state.pendingSelectedText = null;
+  dom.selectedTextChip.classList.add('hidden');
+  dom.selectedTextChipLabel.textContent = '';
+  dom.selectedTextChip.title = '';
   dom.chatInput.value = '';
   autoResizeTextarea();
 }
@@ -635,6 +687,13 @@ function clearChat() {
 
 // ── Context stale handling ────────────────────────────────────────────────
 
+let contextRefreshTimer = null;
+
+function scheduleContextRefresh() {
+  clearTimeout(contextRefreshTimer);
+  contextRefreshTimer = setTimeout(loadContext, 1500);
+}
+
 function showStaleBanner() {
   dom.staleBanner.classList.add('visible');
 }
@@ -647,20 +706,74 @@ function hideStaleBanner() {
 
 function handleBackgroundPortMessage(msg) {
   if (msg.type === 'CONTEXT_STALE') {
-    showStaleBanner();
+    if (!state.streaming) {
+      scheduleContextRefresh();
+    }
   } else if (msg.type === 'NEW_CONVERSATION') {
-    handleNewConversation();
+    handleNewConversation(msg.isReload || false);
+  } else if (msg.type === 'LOAD_CONTEXT') {
+    loadContext();
   } else if (msg.type === 'SELECTED_TEXT') {
     handleSelectedText(msg.text);
+  } else if (msg.type === 'TAB_ACTIVATED') {
+    handleTabActivated(msg.tabId, msg.url);
   }
 }
 
 // ── New conversation detected ─────────────────────────────────────────────
 
-async function handleNewConversation() {
-  if (state.streaming) return; // don't interrupt an active stream
+let newConvInFlight = false;
 
-  // Reset side-chat state
+async function handleNewConversation(isReload = false) {
+  if (state.streaming) return; // don't interrupt an active stream
+  if (newConvInFlight) return;
+  newConvInFlight = true;
+  try {
+    // Reset side-chat state
+    state.sideMessages = [];
+    state.context = null;
+    dom.messagesArea.textContent = '';
+    dom.injectBtn.disabled = true;
+    dom.clearBtn.disabled = true;
+    hideSummaryCard();
+    hideStaleBanner();
+    dismissSelectedTextChip();
+
+    // Collapse context card and show loading indicator
+    dom.contextBody.classList.remove('expanded');
+    dom.contextToggleIcon.classList.remove('expanded');
+    dom.contextHeader.setAttribute('aria-expanded', 'false');
+    dom.contextSummary.textContent = 'New conversation — refreshing context…';
+    dom.contextMessages.textContent = '';
+
+    if (!isReload) {
+      // SPA navigation: wait briefly for ChatGPT to finish rendering
+      await new Promise(r => setTimeout(r, 600));
+      await loadContext();
+    }
+    // isReload=true: LOAD_CONTEXT message triggers loadContext() once the page is ready
+  } finally {
+    newConvInFlight = false;
+  }
+}
+
+// ── Tab activated (user switched browser tabs) ────────────────────────────
+
+async function handleTabActivated(newTabId, url) {
+  if (newTabId === state.tabId) return;
+
+  const isChatGPT = url.includes('chatgpt.com') || url.includes('chat.openai.com');
+  const prevTabId = state.tabId;
+  state.tabId = newTabId;
+
+  // Re-register new tab with background
+  if (state.panelPort) {
+    state.panelPort.postMessage({ type: 'REGISTER_TAB', tabId: newTabId, windowId: state.windowId, prevTabId });
+  }
+  // Stop mutation observer on old tab
+  chrome.tabs.sendMessage(prevTabId, { type: 'PANEL_CLOSED' }).catch(() => {});
+
+  // Clear all state
   state.sideMessages = [];
   state.context = null;
   dom.messagesArea.textContent = '';
@@ -668,25 +781,43 @@ async function handleNewConversation() {
   dom.clearBtn.disabled = true;
   hideSummaryCard();
   hideStaleBanner();
-
-  // Collapse context card and show loading indicator
+  dismissSelectedTextChip();
   dom.contextBody.classList.remove('expanded');
   dom.contextToggleIcon.classList.remove('expanded');
   dom.contextHeader.setAttribute('aria-expanded', 'false');
-  dom.contextSummary.textContent = 'New conversation — refreshing context…';
   dom.contextMessages.textContent = '';
 
-  // Wait briefly for ChatGPT's SPA to finish rendering the new page
-  await new Promise(r => setTimeout(r, 600));
-  await loadContext();
+  if (isChatGPT) {
+    dom.contextCard.classList.remove('hidden');
+    dom.messagesArea.classList.remove('hidden');
+    dom.bottomBar.classList.remove('hidden');
+    dom.inputArea.classList.remove('hidden');
+    dom.emptyState.classList.remove('visible');
+    dom.contextSummary.textContent = 'Reading conversation…';
+    chrome.tabs.sendMessage(newTabId, { type: 'PANEL_OPENED' }).catch(() => {});
+    await loadContext();
+  } else {
+    showEmptyState('no_chatgpt_tab');
+  }
 }
 
 // ── Selected text from Ask SideChat ──────────────────────────────────────
 
 function handleSelectedText(text) {
   if (!text) return;
+  // Clear the side conversation when starting a fresh Ask SideChat mid-session
+  if (state.sideMessages.length > 0 && !state.streaming) {
+    state.sideMessages = [];
+    dom.messagesArea.textContent = '';
+    dom.injectBtn.disabled = true;
+    dom.clearBtn.disabled = true;
+    hideSummaryCard();
+    hideStaleBanner();
+  }
   state.pendingSelectedText = text;
-  dom.selectedTextChipLabel.textContent = `"${text}"`;
+  const truncated = text.length > 50 ? text.slice(0, 50) + '…' : text;
+  dom.selectedTextChipLabel.textContent = `"${truncated}"`;
+  dom.selectedTextChip.title = text;
   dom.selectedTextChip.classList.remove('hidden');
   dom.chatInput.value = '';
   autoResizeTextarea();
@@ -729,8 +860,8 @@ function autoResizeTextarea() {
 // ── Event wiring ──────────────────────────────────────────────────────────
 
 function wireEvents() {
-  // Settings button
-  dom.settingsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage());
+  // Settings button — opens inline settings panel
+  dom.settingsBtn.addEventListener('click', () => SettingsPanel.open());
 
   // Context toggle
   dom.contextHeader.addEventListener('click', toggleContextExpand);
@@ -772,19 +903,13 @@ function wireEvents() {
   // Chip dismiss
   dom.selectedTextChipDismiss.addEventListener('click', dismissSelectedTextChip);
 
-  // Empty state settings
-  dom.emptySettingsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage());
+  // Empty state settings button
+  dom.emptySettingsBtn.addEventListener('click', () => SettingsPanel.open());
 
-  // Model dropdown change
-  dom.modelSelect.addEventListener('change', () => {
-    // Model changed — nothing to persist per-session, just use the new value on next send
-  });
-
-  // Reload settings when storage changes (e.g., options page saved)
+  // Reload settings when storage changes (e.g., settings panel saved)
   chrome.storage.onChanged.addListener(async (changes, area) => {
     if (area !== 'local') return;
     state.settings = await loadSettings();
-    populateModelDropdown();
     const hasKey = getActiveApiKey();
     if (hasKey && dom.emptyState.classList.contains('visible')) {
       dom.emptyState.classList.remove('visible');

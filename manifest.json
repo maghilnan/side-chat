@@ -49,16 +49,6 @@
     "128": "icons/icon-128.png"
   },
 
-  "commands": {
-    "_execute_side_panel": {
-      "suggested_key": {
-        "mac": "Command+Shift+S",
-        "default": "Ctrl+Shift+S"
-      },
-      "description": "Open SideChat"
-    }
-  },
-
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true

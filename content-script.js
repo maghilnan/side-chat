@@ -35,6 +35,7 @@
   const navObserver = new MutationObserver(checkUrlChange);
   navObserver.observe(document.body, { childList: true });
   window.addEventListener('popstate', checkUrlChange);
+  setInterval(checkUrlChange, 1500); // fallback for pushState SPA navigation
 
   // ── Ask SideChat button injection ─────────────────────────────────────────
 
@@ -113,7 +114,9 @@
       e.preventDefault();
       e.stopPropagation();
       const selectedText = window.getSelection()?.toString().trim() || '';
-      chrome.runtime.sendMessage({ type: 'ASK_SIDECHAT', selectedText }).catch(() => {});
+      if (chrome.runtime?.id) {
+        chrome.runtime.sendMessage({ type: 'ASK_SIDECHAT', selectedText }).catch(() => {});
+      }
     });
 
     innerDiv.appendChild(btn);

@@ -15,8 +15,6 @@ No build step, no dependencies, no package manager. Load directly as an unpacked
 3. Click "Load unpacked" → select this directory
 4. After edits: click the refresh icon on the extension card (or use `Cmd+R` in DevTools)
 
-**Keyboard shortcut:** `Cmd+Shift+S` (Mac) / `Ctrl+Shift+S` opens the side panel.
-
 ## Architecture
 
 ### Component Map
@@ -26,6 +24,7 @@ No build step, no dependencies, no package manager. Load directly as an unpacked
 | `background.js` | Service worker — central message router, API call handler, port manager |
 | `content-script.js` | Injected into chatgpt.com — reads DOM, detects changes, injects "Ask SideChat" button |
 | `sidepanel/sidepanel.js` | Main UI controller for the side panel |
+| `sidepanel/settings.js` | Settings UI logic for the side panel settings view |
 | `utils/api.js` | OpenAI & Anthropic API wrappers with streaming support |
 | `utils/dom-reader.js` | ChatGPT DOM parser with 3-tier fallback strategies |
 | `utils/summarizer.js` | Builds system/user prompts for summary generation |
@@ -57,6 +56,12 @@ A `MutationObserver` in `content-script.js` watches for new ChatGPT messages. Wh
 ChatGPT's DOM changes frequently. `dom-reader.js` handles this with:
 - All selectors isolated in the `SELECTORS` object at the top of the file — **this is the single file to update when ChatGPT changes its DOM**
 - Three fallback read strategies tried in order: `[data-message-author-role]` → `article[data-testid]` → `.markdown, .prose`
+
+### Markdown Rendering
+
+`renderMarkdown()` in `sidepanel/sidepanel.js` uses a numbered step pipeline (Steps 1–10).
+- Lists are processed by `processLists()` (just above `renderMarkdown`) — handles loose lists (blank lines between items)
+- The global CSS reset (`*, *::before, *::after { padding: 0 }`) strips default list padding. Always use `padding-left` (not `margin-left`) on `ul`/`ol` — bullets render in the padding area and are clipped without it
 
 ## Key Design Decisions
 
