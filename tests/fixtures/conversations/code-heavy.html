@@ -1,0 +1,38 @@
+<main>
+  <div data-message-author-role="user">
+    <div class="markdown prose">
+      <p>How do I write a function to reverse a string in JavaScript?</p>
+    </div>
+  </div>
+  <div data-message-author-role="assistant">
+    <div class="markdown prose">
+      <p>Here's a simple way to reverse a string in JavaScript:</p>
+      <pre><code>function reverseString(str) {
+  return str.split('').reverse().join('');
+}</code></pre>
+      <p>You can also use a <code>for</code> loop:</p>
+      <pre><code>function reverseString(str) {
+  let reversed = '';
+  for (let i = str.length - 1; i >= 0; i--) {
+    reversed += str[i];
+  }
+  return reversed;
+}</code></pre>
+      <p>Both approaches work, but the first is more concise.</p>
+    </div>
+  </div>
+  <div data-message-author-role="user">
+    <div class="markdown prose">
+      <p>What about using <code>reduce</code>?</p>
+    </div>
+  </div>
+  <div data-message-author-role="assistant">
+    <div class="markdown prose">
+      <p>Yes! You can use <code>Array.prototype.reduce()</code>:</p>
+      <pre><code>function reverseString(str) {
+  return [...str].reduce((reversed, char) => char + reversed, '');
+}</code></pre>
+      <p>This spreads the string into an array of characters and reduces it by prepending each character.</p>
+    </div>
+  </div>
+</main>

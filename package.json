@@ -1,0 +1,20 @@
+{
+  "name": "sidechat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ephemeral side-conversations for ChatGPT",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "vitest run",
+    "test:e2e": "npx playwright test",
+    "test:unit:watch": "vitest watch",
+    "test:e2e:headed": "npx playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "jest-chrome": "^0.8.0",
+    "jsdom": "^26.0.0",
+    "serve": "^14.2.0",
+    "vitest": "^3.0.0"
+  }
+}

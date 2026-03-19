@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatGPT (Mock)</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 20px; }
+    main { max-width: 800px; margin: 0 auto; }
+    [data-message-author-role] { padding: 12px; margin: 8px 0; border-radius: 8px; }
+    [data-message-author-role="user"] { background: #f0f0f0; }
+    [data-message-author-role="assistant"] { background: #e8f4e8; }
+    .markdown, .prose { line-height: 1.6; }
+    pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; overflow-x: auto; }
+    code { background: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+    pre code { background: none; padding: 0; }
+    #prompt-textarea { width: 100%; min-height: 44px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; resize: none; }
+    .input-area { position: fixed; bottom: 0; left: 0; right: 0; padding: 16px; background: white; border-top: 1px solid #eee; }
+  </style>
+</head>
+<body>
+
+<main>
+  <div data-message-author-role="user">
+    <div class="markdown prose">
+      <p>Can you explain how closures work in JavaScript?</p>
+    </div>
+  </div>
+  <div data-message-author-role="assistant">
+    <div class="markdown prose">
+      <p>A <strong>closure</strong> is a function that has access to variables from its outer (enclosing) scope, even after the outer function has returned.</p>
+      <p>Here's a simple example:</p>
+      <pre><code>function createCounter() {
+  let count = 0;
+  return function() {
+    count++;
+    return count;
+  };
+}
+
+const counter = createCounter();
+console.log(counter()); // 1
+console.log(counter()); // 2</code></pre>
+      <p>The inner function <code>closes over</code> the <code>count</code> variable.</p>
+    </div>
+  </div>
+  <div data-message-author-role="user">
+    <div class="markdown prose">
+      <p>What are some practical use cases?</p>
+    </div>
+  </div>
+  <div data-message-author-role="assistant">
+    <div class="markdown prose">
+      <p>Here are some common use cases for closures:</p>
+      <ul>
+        <li><strong>Data privacy</strong> — creating private variables</li>
+        <li><strong>Factory functions</strong> — generating specialized functions</li>
+        <li><strong>Event handlers</strong> — preserving state in callbacks</li>
+      </ul>
+    </div>
+  </div>
+</main>
+
+<div class="input-area">
+  <textarea id="prompt-textarea" placeholder="Message ChatGPT…" rows="1"></textarea>
+</div>
+
+<script src="mock-chatgpt.js"></script>
+</body>
+</html>

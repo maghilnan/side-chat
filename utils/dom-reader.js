@@ -188,5 +188,9 @@ function findChatGPTInput() {
   return el || null;
 }
 
-// Export for content-script.js (content scripts share the window scope)
-window.__sidechat_domReader = { readConversation, findChatGPTInput };
+// Dual export: module.exports for Node/Vitest, window for browser
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { readConversation, findChatGPTInput, extractText, SELECTORS, readViaDataAttributes, readViaArticles, readViaProseElements, MAX_PAIRS_DEFAULT, TOKEN_CHARS_RATIO };
+} else if (typeof window !== 'undefined') {
+  window.__sidechat_domReader = { readConversation, findChatGPTInput };
+}

@@ -1,0 +1,21 @@
+{
+  "id": "chatcmpl-summary123",
+  "object": "chat.completion",
+  "created": 1711000000,
+  "model": "gpt-4o",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Side-note: The user explored how to reverse a string in JavaScript and found that using the spread operator with reduce() is the most elegant approach, while split/reverse/join is the most concise."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 150,
+    "completion_tokens": 42,
+    "total_tokens": 192
+  }
+}
