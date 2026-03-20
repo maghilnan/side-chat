@@ -7,22 +7,36 @@ importScripts('utils/api.js', 'utils/summarizer.js');
 
 // ── Per-tab panel tracking ─────────────────────────────────────────────────
 
-// Disable panel globally on startup; enable per-tab when explicitly opened
-chrome.sidePanel.setOptions({ enabled: false });
+const SIDE_PANEL_PATH = 'sidepanel/sidepanel.html';
 
-const openedTabs = new Set();
+function isSupportedTabUrl(url = '') {
+  return url.startsWith('https://chatgpt.com/') || url.startsWith('https://chat.openai.com/');
+}
 
-// Restore openedTabs from session storage on SW restart
-chrome.storage.session.get('openedTabs', (r) => {
-  (r.openedTabs || []).forEach(id => openedTabs.add(id));
+async function setPanelEnabledForTab(tabId, url) {
+  await chrome.sidePanel.setOptions({
+    tabId,
+    path: SIDE_PANEL_PATH,
+    enabled: isSupportedTabUrl(url),
+  });
+}
+
+async function syncExistingTabsPanelState() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(
+    tabs
+      .filter(tab => typeof tab.id === 'number')
+      .map(tab => setPanelEnabledForTab(tab.id, tab.url || ''))
+  );
+}
+
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
+  console.error('[SideChat] Failed to enable side panel action click behavior:', error);
 });
 
-async function enableAndOpenPanel(tabId) {
-  openedTabs.add(tabId);
-  chrome.storage.session.set({ openedTabs: [...openedTabs] });
-  await chrome.sidePanel.setOptions({ tabId, enabled: true });
-  chrome.sidePanel.open({ tabId }).catch(() => {});
-}
+syncExistingTabsPanelState().catch((error) => {
+  console.error('[SideChat] Failed to sync side panel state for existing tabs:', error);
+});
 
 // ── Install: set up context menu ──────────────────────────────────────────
 
@@ -33,12 +47,6 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ['selection'],
     documentUrlPatterns: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
   });
-});
-
-// ── Open side panel on icon click ────────────────────────────────────────
-
-chrome.action.onClicked.addListener(async (tab) => {
-  await enableAndOpenPanel(tab.id);
 });
 
 // ── Open side panel on context menu click ────────────────────────────────
@@ -52,7 +60,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     } else if (selectedText) {
       pendingSelectedTexts.set(tab.id, selectedText);
     }
-    await enableAndOpenPanel(tab.id);
+    chrome.sidePanel.open({ tabId: tab.id }).catch((error) => {
+      console.error('[SideChat] Failed to open side panel from context menu:', error);
+    });
   }
 });
 
@@ -81,15 +91,6 @@ chrome.runtime.onConnect.addListener((port) => {
         if (p === port) {
           activePanelPorts.delete(tabId);
           chrome.tabs.sendMessage(tabId, { type: 'PANEL_CLOSED' }).catch(() => {});
-          // Check if tab still exists — if yes, user explicitly closed the panel
-          chrome.tabs.get(tabId).then(() => {
-            openedTabs.delete(tabId);
-            chrome.storage.session.set({ openedTabs: [...openedTabs] });
-            chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => {});
-            chrome.storage.session.remove(`tabState_${tabId}`);
-          }).catch(() => {
-            // Tab doesn't exist — already handled by onRemoved
-          });
           break;
         }
       }
@@ -103,6 +104,12 @@ chrome.runtime.onConnect.addListener((port) => {
 // ── Tab lifecycle listeners ───────────────────────────────────────────────
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === 'complete') {
+    setPanelEnabledForTab(tabId, tab.url || '').catch((error) => {
+      console.error(`[SideChat] Failed to update panel state for tab ${tabId}:`, error);
+    });
+  }
+
   const port = activePanelPorts.get(tabId);
   if (!port) return;
 
@@ -124,12 +131,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
-  // Per-tab panel visibility: re-open if this tab had panel enabled
-  if (openedTabs.has(tabId)) {
-    await chrome.sidePanel.setOptions({ tabId, enabled: true });
-    chrome.sidePanel.open({ tabId }).catch(() => {});
-  }
-
   // Forward TAB_ACTIVATED to any connected panel port for this window
   const port = panelPortsByWindow.get(windowId);
   if (!port) return;
@@ -142,8 +143,6 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   activePanelPorts.delete(tabId);
   pendingSelectedTexts.delete(tabId);
-  openedTabs.delete(tabId);
-  chrome.storage.session.set({ openedTabs: [...openedTabs] });
   chrome.storage.session.remove(`tabState_${tabId}`);
 });
 
@@ -224,7 +223,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Panel not open — stash text, open panel; panel will fetch it on init
       pendingSelectedTexts.set(tabId, selectedText);
     }
-    enableAndOpenPanel(tabId);
+    chrome.sidePanel.open({ tabId }).catch((error) => {
+      console.error('[SideChat] Failed to open side panel from Ask SideChat:', error);
+    });
     return false;
   }
 
