@@ -69,6 +69,10 @@ The panel is disabled globally on SW startup (`chrome.sidePanel.setOptions({ ena
 
 **Key gotcha:** Chrome fully unloads the side panel HTML when the panel is disabled for a tab. All per-tab state must live in `chrome.storage.session` — never rely on in-memory JS surviving a tab switch.
 
+**Key gotcha — user gesture:** `chrome.sidePanel.open()` requires an active user gesture. Any `await` before the call (e.g., `await setOptions(...)`) can silently strip that context and cause the panel to not open. For the toolbar button, use `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` instead of a manual `open()` call. For context-menu / Ask SideChat, call `open({ tabId })` with no preceding `await`. Pre-enable the panel via `tabs.onUpdated` so no async work is needed at click time. Always log `open()` failures with `console.error` — never swallow them with `.catch(() => {})`.
+
+**Key gotcha — port disconnects:** Sidepanel port disconnects happen during normal lifecycle transitions (tab switches, SW restarts), not only when the user explicitly closes the panel. Don't disable the panel or clear session state on disconnect alone.
+
 **Explicit close detection:** sidepanel port disconnect + `chrome.tabs.get(tabId)` succeeding → user closed the panel (not a tab switch). Removes the tab from `openedTabs` and clears session state.
 
 **Background streaming continuation:** If the panel disconnects mid-stream (tab switch), `background.js` continues the fetch and saves the completed response to `tabState_<tabId>` in session storage. The panel loads it on reopen.

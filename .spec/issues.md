@@ -1,1 +1,2 @@
-- after adding api details for the first time the tab needs to be reloaing 
+- after adding api details for the first time the tab needs reloaing to work properly this should happen automatically
+- the tag text ui should be minimial instead of showing it within the quotes
