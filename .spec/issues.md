@@ -1,0 +1,1 @@
+- after adding api details for the first time the tab needs to be reloaing 

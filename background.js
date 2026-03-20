@@ -5,6 +5,25 @@
 
 importScripts('utils/api.js', 'utils/summarizer.js');
 
+// ── Per-tab panel tracking ─────────────────────────────────────────────────
+
+// Disable panel globally on startup; enable per-tab when explicitly opened
+chrome.sidePanel.setOptions({ enabled: false });
+
+const openedTabs = new Set();
+
+// Restore openedTabs from session storage on SW restart
+chrome.storage.session.get('openedTabs', (r) => {
+  (r.openedTabs || []).forEach(id => openedTabs.add(id));
+});
+
+async function enableAndOpenPanel(tabId) {
+  openedTabs.add(tabId);
+  chrome.storage.session.set({ openedTabs: [...openedTabs] });
+  await chrome.sidePanel.setOptions({ tabId, enabled: true });
+  chrome.sidePanel.open({ tabId }).catch(() => {});
+}
+
 // ── Install: set up context menu ──────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -19,7 +38,7 @@ chrome.runtime.onInstalled.addListener(() => {
 // ── Open side panel on icon click ────────────────────────────────────────
 
 chrome.action.onClicked.addListener(async (tab) => {
-  await chrome.sidePanel.open({ tabId: tab.id });
+  await enableAndOpenPanel(tab.id);
 });
 
 // ── Open side panel on context menu click ────────────────────────────────
@@ -33,7 +52,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     } else if (selectedText) {
       pendingSelectedTexts.set(tab.id, selectedText);
     }
-    await chrome.sidePanel.open({ tabId: tab.id });
+    await enableAndOpenPanel(tab.id);
   }
 });
 
@@ -61,8 +80,16 @@ chrome.runtime.onConnect.addListener((port) => {
       for (const [tabId, p] of activePanelPorts.entries()) {
         if (p === port) {
           activePanelPorts.delete(tabId);
-          // Notify content script panel is closed
           chrome.tabs.sendMessage(tabId, { type: 'PANEL_CLOSED' }).catch(() => {});
+          // Check if tab still exists — if yes, user explicitly closed the panel
+          chrome.tabs.get(tabId).then(() => {
+            openedTabs.delete(tabId);
+            chrome.storage.session.set({ openedTabs: [...openedTabs] });
+            chrome.sidePanel.setOptions({ tabId, enabled: false }).catch(() => {});
+            chrome.storage.session.remove(`tabState_${tabId}`);
+          }).catch(() => {
+            // Tab doesn't exist — already handled by onRemoved
+          });
           break;
         }
       }
@@ -97,6 +124,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  // Per-tab panel visibility: re-open if this tab had panel enabled
+  if (openedTabs.has(tabId)) {
+    await chrome.sidePanel.setOptions({ tabId, enabled: true });
+    chrome.sidePanel.open({ tabId }).catch(() => {});
+  }
+
+  // Forward TAB_ACTIVATED to any connected panel port for this window
   const port = panelPortsByWindow.get(windowId);
   if (!port) return;
   try {
@@ -105,30 +139,64 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   } catch {}
 });
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+  activePanelPorts.delete(tabId);
+  pendingSelectedTexts.delete(tabId);
+  openedTabs.delete(tabId);
+  chrome.storage.session.set({ openedTabs: [...openedTabs] });
+  chrome.storage.session.remove(`tabState_${tabId}`);
+});
+
 async function handleStreamPort(port) {
+  let disconnected = false;
+  let tabId = null;
+  let assistantText = '';
+
+  port.onDisconnect.addListener(() => { disconnected = true; });
+
   port.onMessage.addListener(async (msg) => {
     if (msg.type !== 'CHAT') return;
 
+    tabId = msg.tabId || null;
     const { messages, model, apiKey, provider } = msg;
 
     try {
       for await (const chunk of SidechatAPI.streamAPIResponse(provider, messages, model, apiKey)) {
         if (chunk.error) {
-          port.postMessage({ type: 'error', message: chunk.error });
+          if (!disconnected) port.postMessage({ type: 'error', message: chunk.error });
           return;
         }
         if (chunk.done) {
-          port.postMessage({ type: 'done' });
+          if (!disconnected) {
+            port.postMessage({ type: 'done' });
+          } else if (tabId && assistantText) {
+            // Panel closed mid-stream — save completed response to session storage
+            await saveStreamResult(tabId, assistantText);
+          }
           return;
         }
         if (chunk.text) {
-          port.postMessage({ type: 'chunk', text: chunk.text });
+          assistantText += chunk.text;
+          if (!disconnected) port.postMessage({ type: 'chunk', text: chunk.text });
         }
       }
     } catch (err) {
-      port.postMessage({ type: 'error', message: err.message || 'Unknown error during streaming.' });
+      if (!disconnected) port.postMessage({ type: 'error', message: err.message || 'Unknown error during streaming.' });
+      // If disconnected and errored, save whatever we got
+      if (disconnected && tabId && assistantText) {
+        await saveStreamResult(tabId, assistantText + '\n\n[Response interrupted by error]');
+      }
     }
   });
+}
+
+async function saveStreamResult(tabId, text) {
+  const key = `tabState_${tabId}`;
+  const data = await chrome.storage.session.get(key);
+  const tabState = data[key] || { sideMessages: [] };
+  tabState.sideMessages = tabState.sideMessages || [];
+  tabState.sideMessages.push({ role: 'assistant', content: text });
+  await chrome.storage.session.set({ [key]: tabState });
 }
 
 // ── Regular message handlers ──────────────────────────────────────────────
@@ -156,7 +224,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Panel not open — stash text, open panel; panel will fetch it on init
       pendingSelectedTexts.set(tabId, selectedText);
     }
-    chrome.sidePanel.open({ tabId }).catch(() => {});
+    enableAndOpenPanel(tabId);
     return false;
   }
 
