@@ -8,14 +8,14 @@
     "sidePanel",
     "storage",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess"
   ],
 
   "host_permissions": [
     "https://chatgpt.com/*",
-    "https://chat.openai.com/*",
-    "https://api.openai.com/*",
-    "https://api.anthropic.com/*"
+    "https://chat.openai.com/*"
   ],
 
   "background": {
@@ -30,9 +30,20 @@
     {
       "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
       "js": ["utils/dom-reader.js", "content-script.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
+
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "chatgpt_iframe_rules",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
 
   "action": {
     "default_title": "Open SideChat",
@@ -47,10 +58,5 @@
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
-  },
-
-  "options_ui": {
-    "page": "options/options.html",
-    "open_in_tab": true
   }
 }
