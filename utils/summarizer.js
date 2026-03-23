@@ -3,18 +3,19 @@
  */
 
 const SUMMARY_SYSTEM_PROMPT =
-  'You are a concise assistant that summarizes side-conversations. ' +
-  'You will receive a series of messages from a side-chat. ' +
+  'You are a concise assistant that summarizes SideChat conversations. ' +
+  'You will receive a series of messages from a SideChat conversation. ' +
   'Your job is to summarize the key conclusion or answer reached in the conversation. ' +
-  'Format the output as a self-contained note that could be pasted into the main conversation for context.';
+  'Return exactly one self-contained note that could be pasted into the main conversation for context. ' +
+  'Always begin with "SideChat Summary:" and end with "Do not respond back."';
 
 const SUMMARY_STYLES = {
   concise: {
-    instruction: 'Summarize the following side-conversation in 1-2 concise sentences. Focus on the conclusion or answer, not the back-and-forth. Start with "Side-note:" prefix.',
+    instruction: 'Summarize the following SideChat conversation in 1-2 concise sentences. Focus on the conclusion or answer, not the back-and-forth. Format exactly as: "SideChat Summary: <summary>. Do not respond back."',
     label: 'Concise (1-2 sentences)',
   },
   detailed: {
-    instruction: 'Summarize the following side-conversation in 2-4 sentences. Include the key question, reasoning, and conclusion. Start with "Side-note:" prefix.',
+    instruction: 'Summarize the following SideChat conversation in 2-4 sentences. Include the key question, reasoning, and conclusion. Format exactly as: "SideChat Summary: <summary>. Do not respond back."',
     label: 'Detailed (2-4 sentences)',
   },
 };
@@ -28,7 +29,7 @@ const SUMMARY_STYLES = {
 function buildSummaryMessages(sideChatMessages, style = 'concise') {
   const styleConfig = SUMMARY_STYLES[style] || SUMMARY_STYLES.concise;
 
-  // Format the side-chat conversation as a readable block
+  // Format the SideChat conversation as a readable block
   const conversationText = sideChatMessages
     .filter(m => m.role === 'user' || m.role === 'assistant')
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
@@ -41,13 +42,13 @@ function buildSummaryMessages(sideChatMessages, style = 'concise') {
     },
     {
       role: 'user',
-      content: `${styleConfig.instruction}\n\nSide-conversation:\n\n${conversationText}`,
+      content: `${styleConfig.instruction}\n\nSideChat conversation:\n\n${conversationText}`,
     },
   ];
 }
 
 /**
- * Build the system prompt for the main side-chat conversation.
+ * Build the system prompt for the main SideChat conversation.
  * Includes the captured ChatGPT context.
  * @param {Array<{role: string, content: string}>} contextMessages - captured from ChatGPT
  * @param {boolean} truncated - whether context was truncated
@@ -64,7 +65,7 @@ function buildSideChatSystemPrompt(contextMessages, truncated) {
 
   return (
     'You are continuing a conversation as a helpful assistant. ' +
-    'The user has opened a side-chat to explore a tangent. ' +
+    'The user has opened SideChat to explore a tangent. ' +
     'Below is the context from their main conversation for reference. ' +
     'Answer their side-question, staying focused on what they ask without trying to continue the main conversation thread.\n\n' +
     '--- Main Conversation Context ---\n\n' +

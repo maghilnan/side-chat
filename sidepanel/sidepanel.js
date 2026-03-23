@@ -169,7 +169,7 @@ function renderRestoredMessages(contextExpanded) {
     const truncated = state.pendingSelectedText.length > 50
       ? state.pendingSelectedText.slice(0, 50) + '…'
       : state.pendingSelectedText;
-    dom.selectedTextChipLabel.textContent = `"${truncated}"`;
+    dom.selectedTextChipLabel.textContent = truncated;
     dom.selectedTextChip.title = state.pendingSelectedText;
     dom.selectedTextChip.classList.remove('hidden');
   }
@@ -356,7 +356,7 @@ function showContextError(errType) {
   if (errType === 'no_messages') {
     state.context = { messages: [], tokenEstimate: 0, truncated: false };
     enableChatUI();
-    dom.contextSummary.textContent = 'No conversation found — side-chat will work without context.';
+    dom.contextSummary.textContent = 'No conversation found — SideChat will work without context.';
   }
 }
 
@@ -510,7 +510,7 @@ function buildApiMessages() {
 
 function buildSystemPrompt() {
   if (!state.context?.messages?.length) {
-    return 'You are a helpful assistant in a side-chat panel. Answer the user\'s questions concisely.';
+    return 'You are a helpful assistant in the SideChat panel. Answer the user\'s questions concisely.';
   }
   const contextBlock = state.context.messages
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
@@ -519,7 +519,7 @@ function buildSystemPrompt() {
     ? '\n\n[Note: The conversation above is truncated. Only the most recent messages are shown.]'
     : '';
   return (
-    'You are continuing a conversation as a helpful assistant. The user has opened a side-chat to explore a tangent. ' +
+    'You are continuing a conversation as a helpful assistant. The user has opened SideChat to explore a tangent. ' +
     'Below is the context from their main conversation for reference. ' +
     'Answer their side-question, staying focused on what they ask without trying to continue the main conversation thread.\n\n' +
     '--- Main Conversation Context ---\n\n' +
@@ -653,6 +653,17 @@ function renderMarkdown(text) {
   return html;
 }
 
+function extractTaggedSelection(text) {
+  if (!text || text[0] !== '"') return null;
+  const delimiterIndex = text.lastIndexOf('"\n\n');
+  if (delimiterIndex <= 0) return null;
+
+  return {
+    selection: text.slice(1, delimiterIndex),
+    body: text.slice(delimiterIndex + 3),
+  };
+}
+
 function appendMessage(role, text) {
   const msgEl = document.createElement('div');
   msgEl.className = `message ${role}`;
@@ -663,7 +674,33 @@ function appendMessage(role, text) {
     // renderMarkdown escapes all HTML before inserting tags — safe to use innerHTML
     bubble.innerHTML = renderMarkdown(text);
   } else {
-    bubble.textContent = text;
+    const tagged = extractTaggedSelection(text);
+    if (tagged) {
+      bubble.classList.add('bubble-with-tag');
+
+      const tagEl = document.createElement('div');
+      tagEl.className = 'message-tag';
+
+      const tagLabel = document.createElement('span');
+      tagLabel.className = 'message-tag-label';
+      tagLabel.textContent = 'Selected text';
+
+      const tagText = document.createElement('span');
+      tagText.className = 'message-tag-text';
+      tagText.textContent = tagged.selection;
+      tagText.title = tagged.selection;
+
+      tagEl.appendChild(tagLabel);
+      tagEl.appendChild(tagText);
+      bubble.appendChild(tagEl);
+
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'message-user-body';
+      bodyEl.textContent = tagged.body;
+      bubble.appendChild(bodyEl);
+    } else {
+      bubble.textContent = text;
+    }
   }
 
   msgEl.appendChild(bubble);
@@ -902,7 +939,7 @@ function handleSelectedText(text) {
   }
   state.pendingSelectedText = text;
   const truncated = text.length > 50 ? text.slice(0, 50) + '…' : text;
-  dom.selectedTextChipLabel.textContent = `"${truncated}"`;
+  dom.selectedTextChipLabel.textContent = truncated;
   dom.selectedTextChip.title = text;
   dom.selectedTextChip.classList.remove('hidden');
   dom.chatInput.value = '';
