@@ -24,11 +24,11 @@ No build step, no dependencies, no package manager. Load directly as an unpacked
 | `background.js` | Service worker — central message router, API call handler, port manager |
 | `content-script.js` | Injected into chatgpt.com — reads DOM, detects changes, injects "Ask SideChat" button |
 | `sidepanel/sidepanel.js` | Main UI controller for the side panel |
-| `sidepanel/settings.js` | Settings UI logic for the side panel settings view |
+| `sidepanel/settings.js` | Settings UI logic for the side panel settings overlay |
 | `utils/api.js` | OpenAI & Anthropic API wrappers with streaming support |
 | `utils/dom-reader.js` | ChatGPT DOM parser with 3-tier fallback strategies |
 | `utils/summarizer.js` | Builds system/user prompts for summary generation |
-| `options/options.js` | Settings page — API key management and preferences |
+| `options/options.js` | Settings page (opens in tab) — API key management and preferences |
 
 ### Streaming Architecture
 
@@ -38,7 +38,14 @@ The extension uses long-lived Chrome ports for streaming:
 2. `background.js` receives the port, makes a `fetch()` to OpenAI/Anthropic, and pipes `ReadableStream` chunks via `port.postMessage()`
 3. `sidepanel.js` listens on `port.onMessage` and renders chunks as they arrive
 
-A separate persistent port (`name: 'sidepanel'`) lets background notify the side panel of context changes.
+A separate persistent port (`name: 'sidepanel'`) lets background notify the side panel of context changes and lifecycle events.
+
+### Port Names
+
+| Name | Lifetime | Purpose |
+|------|----------|---------|
+| `sidepanel` | Persistent | Panel ↔ background: notifications, lifecycle events, state sync |
+| `api-stream` | Per-message | Panel → background → API: streaming response delivery |
 
 ### Context Capture Flow
 
@@ -49,7 +56,7 @@ A separate persistent port (`name: 'sidepanel'`) lets background notify the side
 
 ### Stale Context Detection
 
-A `MutationObserver` in `content-script.js` watches for new ChatGPT messages. When new messages arrive while the panel is open, it sends `CONTEXT_STALE` → `background.js` → side panel port → side panel shows a refresh banner.
+A `MutationObserver` in `content-script.js` watches for new ChatGPT messages (tracks `[data-message-author-role]` element count). When new messages arrive while the panel is open, it sends `CONTEXT_STALE` → `background.js` → side panel port → side panel shows a refresh banner. The panel debounces refresh scheduling to avoid rapid fires.
 
 ### DOM Robustness
 
@@ -59,23 +66,47 @@ ChatGPT's DOM changes frequently. `dom-reader.js` handles this with:
 
 ### Markdown Rendering
 
-`renderMarkdown()` in `sidepanel/sidepanel.js` uses a numbered step pipeline (Steps 1–10).
+`renderMarkdown()` in `sidepanel/sidepanel.js` uses a numbered step pipeline (Steps 1–10). HTML is escaped via `escapeHtml()` before processing to prevent XSS.
 - Lists are processed by `processLists()` (just above `renderMarkdown`) — handles loose lists (blank lines between items)
 - The global CSS reset (`*, *::before, *::after { padding: 0 }`) strips default list padding. Always use `padding-left` (not `margin-left`) on `ul`/`ol` — bullets render in the padding area and are clipped without it
 
 ### Per-Tab Panel Visibility
 
-The panel is disabled globally on SW startup (`chrome.sidePanel.setOptions({ enabled: false })`), then enabled per-tab only when explicitly opened. `openedTabs` Set in `background.js` tracks which tabs have an active panel; mirrored to `chrome.storage.session` to survive SW restarts. `tabs.onActivated` re-opens the panel for tabs in `openedTabs`.
+The panel is enabled per-tab only for ChatGPT URLs via `setPanelEnabledForTab(tabId, url)`. On SW startup, `syncExistingTabsPanelState()` re-enables the panel for any already-open ChatGPT tabs. For the toolbar button, `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` is used — no manual `open()` call.
+
+Open tabs are tracked via the `activePanelPorts` Map (tabId → port) in memory. There is no separate `openedTabs` set — if a port exists in `activePanelPorts`, the panel is open for that tab. A secondary `panelPortsByWindow` Map (windowId → port) is used for `TAB_ACTIVATED` routing.
 
 **Key gotcha:** Chrome fully unloads the side panel HTML when the panel is disabled for a tab. All per-tab state must live in `chrome.storage.session` — never rely on in-memory JS surviving a tab switch.
 
-**Key gotcha — user gesture:** `chrome.sidePanel.open()` requires an active user gesture. Any `await` before the call (e.g., `await setOptions(...)`) can silently strip that context and cause the panel to not open. For the toolbar button, use `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` instead of a manual `open()` call. For context-menu / Ask SideChat, call `open({ tabId })` with no preceding `await`. Pre-enable the panel via `tabs.onUpdated` so no async work is needed at click time. Always log `open()` failures with `console.error` — never swallow them with `.catch(() => {})`.
+**Key gotcha — user gesture:** `chrome.sidePanel.open()` requires an active user gesture. Any `await` before the call (e.g., `await setOptions(...)`) can silently strip that context and cause the panel to not open. For context-menu / Ask SideChat, call `open({ tabId })` with no preceding `await`. Pre-enable the panel via `tabs.onUpdated` so no async work is needed at click time. Always log `open()` failures with `console.error` — never swallow them with `.catch(() => {})`.
 
-**Key gotcha — port disconnects:** Sidepanel port disconnects happen during normal lifecycle transitions (tab switches, SW restarts), not only when the user explicitly closes the panel. Don't disable the panel or clear session state on disconnect alone.
+**Key gotcha — port disconnects:** `sidepanel` port disconnects happen during normal lifecycle transitions (tab switches, SW restarts), not only when the user explicitly closes the panel. Don't disable the panel or clear session state on disconnect alone. The panel auto-reconnects after 100ms on disconnect; on reconnect it calls `GET_PENDING_TEXT` to fetch any stashed context-menu text.
 
-**Explicit close detection:** sidepanel port disconnect + `chrome.tabs.get(tabId)` succeeding → user closed the panel (not a tab switch). Removes the tab from `openedTabs` and clears session state.
+**Explicit close detection:** sidepanel port disconnect + `chrome.tabs.get(tabId)` succeeding → user closed the panel (not a tab switch). Removes the tab from `activePanelPorts` and clears session state.
 
 **Background streaming continuation:** If the panel disconnects mid-stream (tab switch), `background.js` continues the fetch and saves the completed response to `tabState_<tabId>` in session storage. The panel loads it on reopen.
+
+**Tab reload handling:** When `tabs.onUpdated` fires with `status: 'loading'`, background sends `NEW_CONVERSATION` with `isReload: true` to clear the panel state. When the page finishes loading (`status: 'complete'`), background delays `LOAD_CONTEXT` by 800ms to allow ChatGPT's DOM to render before reading context.
+
+### Message Types
+
+| Type | Direction | Purpose |
+|------|-----------|---------|
+| `REGISTER_TAB` | panel → bg | Panel registers its tabId on startup |
+| `GET_CONTEXT` | panel → bg → content | Request main conversation from ChatGPT DOM |
+| `CONTEXT_STALE` | content → bg → panel | New ChatGPT message detected; show refresh banner |
+| `NEW_CONVERSATION` | content → bg → panel | ChatGPT URL/conversation changed; clear side-chat |
+| `LOAD_CONTEXT` | bg → panel | Page loaded; trigger context fetch |
+| `TAB_ACTIVATED` | bg → panel | User switched tabs |
+| `SELECTED_TEXT` | bg → panel | Deliver context-menu selected text to panel |
+| `GET_PENDING_TEXT` | panel → bg | Fetch stashed context-menu text after reconnect |
+| `ASK_SIDECHAT` | content → bg | "Ask SideChat" button clicked; open panel |
+| `PANEL_READY` | panel → bg → content | Panel opened; start mutation observer in content script |
+| `PANEL_OPENED` | bg → content | Tell content script panel is active (start observer) |
+| `PANEL_CLOSED` | bg → content | Tell content script panel closed (stop observer) |
+| `PASTE_SUMMARY` | panel → bg → content | Inject summary text into ChatGPT input |
+| `GET_SUMMARY` | panel → bg | Generate summary via non-streaming `callAPI()` |
+| `CHAT` | panel → bg (stream port) | Send message, receive streamed response |
 
 ## Key Design Decisions
 
@@ -90,7 +121,6 @@ The panel is disabled globally on SW startup (`chrome.sidePanel.setOptions({ ena
 ```javascript
 // chrome.storage.session (per-tab ephemeral state)
 {
-  openedTabs: [tabId, ...],  // tabs with panel explicitly opened
   [`tabState_${tabId}`]: {
     context: { messages, tokenEstimate, truncated } | null,
     sideMessages: [{ role, content }],
@@ -109,6 +139,12 @@ The panel is disabled globally on SW startup (`chrome.sidePanel.setOptions({ ena
 }
 ```
 
+## Available Models
+
+**Anthropic:** `claude-sonnet-4-20250514` (default), `claude-opus-4-5`, `claude-haiku-4-5-20251001`
+
+**OpenAI:** `gpt-4o` (default), `gpt-4o-mini`, `gpt-4-turbo`
+
 ## Requirements Spec
 
-Full MVP specification is in `.spec/requirement.md` — covers user flows, error handling, UI/UX, and definition of done.
+Full MVP specification is in `.spec/requirement.md` — covers user flows, error handling, UI/UX, and definition of done. Known issues and backlog are tracked in `.spec/issues.md`.
