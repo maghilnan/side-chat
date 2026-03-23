@@ -5,6 +5,39 @@
 
 importScripts('utils/api.js', 'utils/summarizer.js');
 
+// ── Per-tab panel tracking ─────────────────────────────────────────────────
+
+const SIDE_PANEL_PATH = 'sidepanel/sidepanel.html';
+
+function isSupportedTabUrl(url = '') {
+  return url.startsWith('https://chatgpt.com/') || url.startsWith('https://chat.openai.com/');
+}
+
+async function setPanelEnabledForTab(tabId, url) {
+  await chrome.sidePanel.setOptions({
+    tabId,
+    path: SIDE_PANEL_PATH,
+    enabled: isSupportedTabUrl(url),
+  });
+}
+
+async function syncExistingTabsPanelState() {
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(
+    tabs
+      .filter(tab => typeof tab.id === 'number')
+      .map(tab => setPanelEnabledForTab(tab.id, tab.url || ''))
+  );
+}
+
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
+  console.error('[SideChat] Failed to enable side panel action click behavior:', error);
+});
+
+syncExistingTabsPanelState().catch((error) => {
+  console.error('[SideChat] Failed to sync side panel state for existing tabs:', error);
+});
+
 // ── Install: set up context menu ──────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -14,12 +47,6 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ['selection'],
     documentUrlPatterns: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
   });
-});
-
-// ── Open side panel on icon click ────────────────────────────────────────
-
-chrome.action.onClicked.addListener(async (tab) => {
-  await chrome.sidePanel.open({ tabId: tab.id });
 });
 
 // ── Open side panel on context menu click ────────────────────────────────
@@ -33,7 +60,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     } else if (selectedText) {
       pendingSelectedTexts.set(tab.id, selectedText);
     }
-    await chrome.sidePanel.open({ tabId: tab.id });
+    chrome.sidePanel.open({ tabId: tab.id }).catch((error) => {
+      console.error('[SideChat] Failed to open side panel from context menu:', error);
+    });
   }
 });
 
@@ -61,7 +90,6 @@ chrome.runtime.onConnect.addListener((port) => {
       for (const [tabId, p] of activePanelPorts.entries()) {
         if (p === port) {
           activePanelPorts.delete(tabId);
-          // Notify content script panel is closed
           chrome.tabs.sendMessage(tabId, { type: 'PANEL_CLOSED' }).catch(() => {});
           break;
         }
@@ -76,6 +104,12 @@ chrome.runtime.onConnect.addListener((port) => {
 // ── Tab lifecycle listeners ───────────────────────────────────────────────
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url || changeInfo.status === 'complete') {
+    setPanelEnabledForTab(tabId, tab.url || '').catch((error) => {
+      console.error(`[SideChat] Failed to update panel state for tab ${tabId}:`, error);
+    });
+  }
+
   const port = activePanelPorts.get(tabId);
   if (!port) return;
 
@@ -97,6 +131,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  // Forward TAB_ACTIVATED to any connected panel port for this window
   const port = panelPortsByWindow.get(windowId);
   if (!port) return;
   try {
@@ -105,30 +140,62 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   } catch {}
 });
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+  activePanelPorts.delete(tabId);
+  pendingSelectedTexts.delete(tabId);
+  chrome.storage.session.remove(`tabState_${tabId}`);
+});
+
 async function handleStreamPort(port) {
+  let disconnected = false;
+  let tabId = null;
+  let assistantText = '';
+
+  port.onDisconnect.addListener(() => { disconnected = true; });
+
   port.onMessage.addListener(async (msg) => {
     if (msg.type !== 'CHAT') return;
 
+    tabId = msg.tabId || null;
     const { messages, model, apiKey, provider } = msg;
 
     try {
       for await (const chunk of SidechatAPI.streamAPIResponse(provider, messages, model, apiKey)) {
         if (chunk.error) {
-          port.postMessage({ type: 'error', message: chunk.error });
+          if (!disconnected) port.postMessage({ type: 'error', message: chunk.error });
           return;
         }
         if (chunk.done) {
-          port.postMessage({ type: 'done' });
+          if (!disconnected) {
+            port.postMessage({ type: 'done' });
+          } else if (tabId && assistantText) {
+            // Panel closed mid-stream — save completed response to session storage
+            await saveStreamResult(tabId, assistantText);
+          }
           return;
         }
         if (chunk.text) {
-          port.postMessage({ type: 'chunk', text: chunk.text });
+          assistantText += chunk.text;
+          if (!disconnected) port.postMessage({ type: 'chunk', text: chunk.text });
         }
       }
     } catch (err) {
-      port.postMessage({ type: 'error', message: err.message || 'Unknown error during streaming.' });
+      if (!disconnected) port.postMessage({ type: 'error', message: err.message || 'Unknown error during streaming.' });
+      // If disconnected and errored, save whatever we got
+      if (disconnected && tabId && assistantText) {
+        await saveStreamResult(tabId, assistantText + '\n\n[Response interrupted by error]');
+      }
     }
   });
+}
+
+async function saveStreamResult(tabId, text) {
+  const key = `tabState_${tabId}`;
+  const data = await chrome.storage.session.get(key);
+  const tabState = data[key] || { sideMessages: [] };
+  tabState.sideMessages = tabState.sideMessages || [];
+  tabState.sideMessages.push({ role: 'assistant', content: text });
+  await chrome.storage.session.set({ [key]: tabState });
 }
 
 // ── Regular message handlers ──────────────────────────────────────────────
@@ -156,7 +223,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Panel not open — stash text, open panel; panel will fetch it on init
       pendingSelectedTexts.set(tabId, selectedText);
     }
-    chrome.sidePanel.open({ tabId }).catch(() => {});
+    chrome.sidePanel.open({ tabId }).catch((error) => {
+      console.error('[SideChat] Failed to open side panel from Ask SideChat:', error);
+    });
     return false;
   }
 

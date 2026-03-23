@@ -1,0 +1,4 @@
+- [fixed] after adding api details for the first time the tab needs reloaing to work properly this should happen automatically
+- [hard] cursor focus needs to change based on context
+- the tag text ui should be minimial instead of showing it within the quotes
+- fix contexual UI make it seemless

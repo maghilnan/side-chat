@@ -63,10 +63,24 @@ ChatGPT's DOM changes frequently. `dom-reader.js` handles this with:
 - Lists are processed by `processLists()` (just above `renderMarkdown`) — handles loose lists (blank lines between items)
 - The global CSS reset (`*, *::before, *::after { padding: 0 }`) strips default list padding. Always use `padding-left` (not `margin-left`) on `ul`/`ol` — bullets render in the padding area and are clipped without it
 
+### Per-Tab Panel Visibility
+
+The panel is disabled globally on SW startup (`chrome.sidePanel.setOptions({ enabled: false })`), then enabled per-tab only when explicitly opened. `openedTabs` Set in `background.js` tracks which tabs have an active panel; mirrored to `chrome.storage.session` to survive SW restarts. `tabs.onActivated` re-opens the panel for tabs in `openedTabs`.
+
+**Key gotcha:** Chrome fully unloads the side panel HTML when the panel is disabled for a tab. All per-tab state must live in `chrome.storage.session` — never rely on in-memory JS surviving a tab switch.
+
+**Key gotcha — user gesture:** `chrome.sidePanel.open()` requires an active user gesture. Any `await` before the call (e.g., `await setOptions(...)`) can silently strip that context and cause the panel to not open. For the toolbar button, use `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` instead of a manual `open()` call. For context-menu / Ask SideChat, call `open({ tabId })` with no preceding `await`. Pre-enable the panel via `tabs.onUpdated` so no async work is needed at click time. Always log `open()` failures with `console.error` — never swallow them with `.catch(() => {})`.
+
+**Key gotcha — port disconnects:** Sidepanel port disconnects happen during normal lifecycle transitions (tab switches, SW restarts), not only when the user explicitly closes the panel. Don't disable the panel or clear session state on disconnect alone.
+
+**Explicit close detection:** sidepanel port disconnect + `chrome.tabs.get(tabId)` succeeding → user closed the panel (not a tab switch). Removes the tab from `openedTabs` and clears session state.
+
+**Background streaming continuation:** If the panel disconnects mid-stream (tab switch), `background.js` continues the fetch and saves the completed response to `tabState_<tabId>` in session storage. The panel loads it on reopen.
+
 ## Key Design Decisions
 
-- **No persistence** — all side-chat state is lost on panel close, by design
-- **Ephemeral only** — the extension intentionally avoids history, branching, or session management
+- **Per-tab ephemeral state** — side-chat state persists per-tab in `chrome.storage.session` (survives panel close/reopen within a browser session; cleared on browser close or explicit panel close)
+- **No cross-session history** — intentionally avoids history, branching, or session management across browser restarts
 - **ChatGPT only** — only `chatgpt.com` and `chat.openai.com` are supported (no Claude.ai, Gemini, etc.)
 - **No frameworks** — pure vanilla JS; keep it that way unless there's a compelling reason
 - **API keys** stored in `chrome.storage.local` (Chrome encrypts at rest); never logged
@@ -74,6 +88,18 @@ ChatGPT's DOM changes frequently. `dom-reader.js` handles this with:
 ## Storage Schema
 
 ```javascript
+// chrome.storage.session (per-tab ephemeral state)
+{
+  openedTabs: [tabId, ...],  // tabs with panel explicitly opened
+  [`tabState_${tabId}`]: {
+    context: { messages, tokenEstimate, truncated } | null,
+    sideMessages: [{ role, content }],
+    summaryVisible: boolean,
+    pendingSelectedText: string | null,
+    contextExpanded: boolean,
+  }
+}
+
 // chrome.storage.local
 {
   apiKeys: [{ provider: 'openai' | 'anthropic', key: string }],

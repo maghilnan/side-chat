@@ -60,6 +60,8 @@ const dom = {
 // ── Port management ───────────────────────────────────────────────────────
 
 let isFirstConnect = true;
+let eventsWired = false;
+let lifecycleEventsWired = false;
 
 function connectPanelPort() {
   if (!chrome.runtime?.id) return; // extension context invalidated — stop
@@ -85,11 +87,104 @@ function connectPanelPort() {
   } catch { /* extension context invalidated */ }
 }
 
+// ── Session storage helpers ────────────────────────────────────────────────
+
+async function loadStateFromSession(tabId) {
+  const key = `tabState_${tabId}`;
+  return new Promise(resolve => {
+    chrome.storage.session.get(key, (r) => resolve(r[key] || null));
+  });
+}
+
+function saveStateToSession() {
+  if (!state.tabId) return;
+  const key = `tabState_${state.tabId}`;
+  chrome.storage.session.set({
+    [key]: {
+      context: state.context,
+      sideMessages: state.sideMessages,
+      summaryVisible: state.summaryVisible,
+      pendingSelectedText: state.pendingSelectedText,
+      contextExpanded: dom.contextBody?.classList.contains('expanded') || false,
+    },
+  });
+}
+
+let _saveDebounceTimer = null;
+function saveStateDebounced() {
+  clearTimeout(_saveDebounceTimer);
+  _saveDebounceTimer = setTimeout(saveStateToSession, 300);
+}
+
+let pendingInputFocusTimer = null;
+
+function focusSideChatInput({ attempts = 8, delay = 75 } = {}) {
+  clearTimeout(pendingInputFocusTimer);
+
+  const attemptFocus = (remaining) => {
+    if (!dom.chatInput || dom.chatInput.disabled) {
+      if (remaining > 0) {
+        pendingInputFocusTimer = setTimeout(() => attemptFocus(remaining - 1), delay);
+      }
+      return;
+    }
+
+    try { window.focus(); } catch {}
+    dom.chatInput.focus({ preventScroll: true });
+    const cursorPos = dom.chatInput.value.length;
+    dom.chatInput.setSelectionRange(cursorPos, cursorPos);
+
+    const focused = document.activeElement === dom.chatInput && document.hasFocus();
+    if (!focused && remaining > 0) {
+      pendingInputFocusTimer = setTimeout(() => attemptFocus(remaining - 1), delay);
+    }
+  };
+
+  attemptFocus(attempts);
+}
+
+function restoreState(saved) {
+  state.context = saved.context || null;
+  state.sideMessages = saved.sideMessages || [];
+  state.summaryVisible = saved.summaryVisible || false;
+  state.pendingSelectedText = saved.pendingSelectedText || null;
+}
+
+function renderRestoredMessages(contextExpanded) {
+  dom.messagesArea.textContent = '';
+  enableChatUI();
+  state.sideMessages.forEach(msg => appendMessage(msg.role, msg.content));
+  if (state.context) {
+    renderContextPreview();
+    if (contextExpanded) {
+      dom.contextBody.classList.add('expanded');
+      dom.contextToggleIcon.classList.add('expanded');
+      dom.contextHeader.setAttribute('aria-expanded', 'true');
+    }
+  }
+  dom.injectBtn.disabled = state.sideMessages.length === 0;
+  dom.clearBtn.disabled = state.sideMessages.length === 0;
+  if (state.summaryVisible) dom.summaryCard.classList.add('visible');
+  if (state.pendingSelectedText) {
+    const truncated = state.pendingSelectedText.length > 50
+      ? state.pendingSelectedText.slice(0, 50) + '…'
+      : state.pendingSelectedText;
+    dom.selectedTextChipLabel.textContent = truncated;
+    dom.selectedTextChip.title = state.pendingSelectedText;
+    dom.selectedTextChip.classList.remove('hidden');
+  }
+  scrollToBottom();
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────
 
 async function init() {
   // Connect long-lived port to background for CONTEXT_STALE notifications
   connectPanelPort();
+
+  // Register UI and storage listeners even if the panel starts in an empty state.
+  wireEvents();
+  wireLifecycleEvents();
 
   // Get active tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -116,11 +211,26 @@ async function init() {
     return;
   }
 
-  // Load context
-  await loadContext();
+  await bootstrapChatPanel();
+}
 
-  // Wire events
-  wireEvents();
+async function bootstrapChatPanel() {
+  showChatShell();
+
+  // Try to restore saved state for this tab
+  const saved = state.tabId ? await loadStateFromSession(state.tabId) : null;
+  if (saved && (saved.sideMessages?.length > 0 || saved.context)) {
+    restoreState(saved);
+    renderRestoredMessages(saved.contextExpanded);
+    // Auto-refresh context; show banner if it changed
+    const oldCount = state.context?.messages?.length || 0;
+    await loadContext();
+    if ((state.context?.messages?.length || 0) !== oldCount) {
+      showStaleBanner();
+    }
+  } else {
+    await loadContext();
+  }
 
   // Check for selected text that triggered this panel open
   if (state.tabId) {
@@ -246,7 +356,7 @@ function showContextError(errType) {
   if (errType === 'no_messages') {
     state.context = { messages: [], tokenEstimate: 0, truncated: false };
     enableChatUI();
-    dom.contextSummary.textContent = 'No conversation found — side-chat will work without context.';
+    dom.contextSummary.textContent = 'No conversation found — SideChat will work without context.';
   }
 }
 
@@ -269,17 +379,22 @@ function showEmptyState(type) {
   }
 }
 
-// ── Chat UI ───────────────────────────────────────────────────────────────
-
-function enableChatUI() {
+function showChatShell() {
   dom.emptyState.classList.remove('visible');
+  dom.emptySettingsBtn.classList.add('hidden');
   dom.contextCard.classList.remove('hidden');
   dom.messagesArea.classList.remove('hidden');
   dom.bottomBar.classList.remove('hidden');
   dom.inputArea.classList.remove('hidden');
+}
+
+// ── Chat UI ───────────────────────────────────────────────────────────────
+
+function enableChatUI() {
+  showChatShell();
   dom.chatInput.disabled = false;
   dom.sendBtn.disabled = false;
-  dom.chatInput.focus();
+  focusSideChatInput({ attempts: 3, delay: 50 });
 }
 
 function setInputLocked(locked) {
@@ -314,6 +429,7 @@ async function sendMessage() {
   state.sideMessages.push({ role: 'user', content: text });
   appendMessage('user', text);
   scrollToBottom();
+  saveStateDebounced();
 
   setInputLocked(true);
 
@@ -344,6 +460,7 @@ async function sendMessage() {
       port.disconnect();
       state.apiPort = null;
       state.sideMessages.push({ role: 'assistant', content: assistantText });
+      saveStateDebounced();
       setInputLocked(false);
       dom.injectBtn.disabled = false;
       dom.clearBtn.disabled = false;
@@ -368,6 +485,7 @@ async function sendMessage() {
 
   port.postMessage({
     type: 'CHAT',
+    tabId: state.tabId,
     messages: apiMessages,
     model: keyInfo.model,
     apiKey: keyInfo.apiKey,
@@ -392,7 +510,7 @@ function buildApiMessages() {
 
 function buildSystemPrompt() {
   if (!state.context?.messages?.length) {
-    return 'You are a helpful assistant in a side-chat panel. Answer the user\'s questions concisely.';
+    return 'You are a helpful assistant in the SideChat panel. Answer the user\'s questions concisely.';
   }
   const contextBlock = state.context.messages
     .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
@@ -401,7 +519,7 @@ function buildSystemPrompt() {
     ? '\n\n[Note: The conversation above is truncated. Only the most recent messages are shown.]'
     : '';
   return (
-    'You are continuing a conversation as a helpful assistant. The user has opened a side-chat to explore a tangent. ' +
+    'You are continuing a conversation as a helpful assistant. The user has opened SideChat to explore a tangent. ' +
     'Below is the context from their main conversation for reference. ' +
     'Answer their side-question, staying focused on what they ask without trying to continue the main conversation thread.\n\n' +
     '--- Main Conversation Context ---\n\n' +
@@ -486,13 +604,13 @@ function renderMarkdown(text) {
   let html = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_match, _lang, code) => {
     const idx = codeBlocks.length;
     codeBlocks.push(`<pre><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`);
-    return `\x00CODE_BLOCK_${idx}\x00`;
+    return `\x00CODEBLOCK${idx}\x00`;
   });
 
   // Step 2: Escape HTML in non-code content (split on placeholders to avoid double-escaping)
   html = html.split('\x00').map((part, i) => {
-    // Odd-indexed parts are placeholder tokens like "CODE_BLOCK_0"
-    if (i % 2 === 1 && part.startsWith('CODE_BLOCK_')) return '\x00' + part + '\x00';
+    // Odd-indexed parts are placeholder tokens like "CODEBLOCK0"
+    if (i % 2 === 1 && part.startsWith('CODEBLOCK')) return '\x00' + part + '\x00';
     return escapeHtml(part);
   }).join('');
 
@@ -522,17 +640,28 @@ function renderMarkdown(text) {
   html = segments.map(seg => {
     seg = seg.trim();
     if (!seg) return '';
-    if (blockTagRe.test(seg) || seg.startsWith('\x00CODE_BLOCK_')) return seg;
+    if (blockTagRe.test(seg) || seg.startsWith('\x00CODEBLOCK')) return seg;
     // Single newlines within a paragraph become <br>
     return `<p>${seg.replace(/\n/g, '<br>')}</p>`;
   }).filter(Boolean).join('\n');
 
   // Step 10: Restore fenced code blocks
   codeBlocks.forEach((block, i) => {
-    html = html.replace(`\x00CODE_BLOCK_${i}\x00`, block);
+    html = html.replace(`\x00CODEBLOCK${i}\x00`, block);
   });
 
   return html;
+}
+
+function extractTaggedSelection(text) {
+  if (!text || text[0] !== '"') return null;
+  const delimiterIndex = text.lastIndexOf('"\n\n');
+  if (delimiterIndex <= 0) return null;
+
+  return {
+    selection: text.slice(1, delimiterIndex),
+    body: text.slice(delimiterIndex + 3),
+  };
 }
 
 function appendMessage(role, text) {
@@ -545,7 +674,33 @@ function appendMessage(role, text) {
     // renderMarkdown escapes all HTML before inserting tags — safe to use innerHTML
     bubble.innerHTML = renderMarkdown(text);
   } else {
-    bubble.textContent = text;
+    const tagged = extractTaggedSelection(text);
+    if (tagged) {
+      bubble.classList.add('bubble-with-tag');
+
+      const tagEl = document.createElement('div');
+      tagEl.className = 'message-tag';
+
+      const tagLabel = document.createElement('span');
+      tagLabel.className = 'message-tag-label';
+      tagLabel.textContent = 'Selected text';
+
+      const tagText = document.createElement('span');
+      tagText.className = 'message-tag-text';
+      tagText.textContent = tagged.selection;
+      tagText.title = tagged.selection;
+
+      tagEl.appendChild(tagLabel);
+      tagEl.appendChild(tagText);
+      bubble.appendChild(tagEl);
+
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'message-user-body';
+      bodyEl.textContent = tagged.body;
+      bubble.appendChild(bodyEl);
+    } else {
+      bubble.textContent = text;
+    }
   }
 
   msgEl.appendChild(bubble);
@@ -683,6 +838,7 @@ function clearChat() {
   hideSummaryCard();
   dismissSelectedTextChip();
   scrollToBottom();
+  saveStateDebounced();
 }
 
 // ── Context stale handling ────────────────────────────────────────────────
@@ -729,6 +885,9 @@ async function handleNewConversation(isReload = false) {
   if (newConvInFlight) return;
   newConvInFlight = true;
   try {
+    // Clear session state for this tab (conversation changed)
+    if (state.tabId) chrome.storage.session.remove(`tabState_${state.tabId}`);
+
     // Reset side-chat state
     state.sideMessages = [];
     state.context = null;
@@ -759,46 +918,10 @@ async function handleNewConversation(isReload = false) {
 
 // ── Tab activated (user switched browser tabs) ────────────────────────────
 
-async function handleTabActivated(newTabId, url) {
-  if (newTabId === state.tabId) return;
-
-  const isChatGPT = url.includes('chatgpt.com') || url.includes('chat.openai.com');
-  const prevTabId = state.tabId;
-  state.tabId = newTabId;
-
-  // Re-register new tab with background
-  if (state.panelPort) {
-    state.panelPort.postMessage({ type: 'REGISTER_TAB', tabId: newTabId, windowId: state.windowId, prevTabId });
-  }
-  // Stop mutation observer on old tab
-  chrome.tabs.sendMessage(prevTabId, { type: 'PANEL_CLOSED' }).catch(() => {});
-
-  // Clear all state
-  state.sideMessages = [];
-  state.context = null;
-  dom.messagesArea.textContent = '';
-  dom.injectBtn.disabled = true;
-  dom.clearBtn.disabled = true;
-  hideSummaryCard();
-  hideStaleBanner();
-  dismissSelectedTextChip();
-  dom.contextBody.classList.remove('expanded');
-  dom.contextToggleIcon.classList.remove('expanded');
-  dom.contextHeader.setAttribute('aria-expanded', 'false');
-  dom.contextMessages.textContent = '';
-
-  if (isChatGPT) {
-    dom.contextCard.classList.remove('hidden');
-    dom.messagesArea.classList.remove('hidden');
-    dom.bottomBar.classList.remove('hidden');
-    dom.inputArea.classList.remove('hidden');
-    dom.emptyState.classList.remove('visible');
-    dom.contextSummary.textContent = 'Reading conversation…';
-    chrome.tabs.sendMessage(newTabId, { type: 'PANEL_OPENED' }).catch(() => {});
-    await loadContext();
-  } else {
-    showEmptyState('no_chatgpt_tab');
-  }
+async function handleTabActivated(_newTabId, _url) {
+  // With per-tab panels, Chrome unloads/reloads the panel per tab automatically.
+  // Just save state so it can be restored when the panel reopens on this tab.
+  saveStateToSession();
 }
 
 // ── Selected text from Ask SideChat ──────────────────────────────────────
@@ -816,18 +939,14 @@ function handleSelectedText(text) {
   }
   state.pendingSelectedText = text;
   const truncated = text.length > 50 ? text.slice(0, 50) + '…' : text;
-  dom.selectedTextChipLabel.textContent = `"${truncated}"`;
+  dom.selectedTextChipLabel.textContent = truncated;
   dom.selectedTextChip.title = text;
   dom.selectedTextChip.classList.remove('hidden');
   dom.chatInput.value = '';
   autoResizeTextarea();
-  // Position cursor at the end so user can type their question.
-  // Use a small delay so the panel window has time to receive focus
-  // before the focus() call is made (needed when the panel was just opened).
-  setTimeout(() => {
-    dom.chatInput.focus();
-    dom.chatInput.setSelectionRange(dom.chatInput.value.length, dom.chatInput.value.length);
-  }, 100);
+  // Keep retrying focus briefly because the browser may still be transferring
+  // focus from the ChatGPT page to the side panel after the context-menu action.
+  focusSideChatInput({ attempts: 10, delay: 80 });
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────
@@ -860,6 +979,9 @@ function autoResizeTextarea() {
 // ── Event wiring ──────────────────────────────────────────────────────────
 
 function wireEvents() {
+  if (eventsWired) return;
+  eventsWired = true;
+
   // Settings button — opens inline settings panel
   dom.settingsBtn.addEventListener('click', () => SettingsPanel.open());
 
@@ -912,11 +1034,26 @@ function wireEvents() {
     state.settings = await loadSettings();
     const hasKey = getActiveApiKey();
     if (hasKey && dom.emptyState.classList.contains('visible')) {
-      dom.emptyState.classList.remove('visible');
-      dom.contextCard.classList.remove('hidden');
-      dom.messagesArea.classList.remove('hidden');
-      dom.bottomBar.classList.remove('hidden');
-      await loadContext();
+      await bootstrapChatPanel();
+    }
+  });
+}
+
+function wireLifecycleEvents() {
+  if (lifecycleEventsWired) return;
+  lifecycleEventsWired = true;
+
+  // Save state on visibility change (tab switch / panel close)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveStateToSession();
+    if (document.visibilityState === 'visible' && state.pendingSelectedText) {
+      focusSideChatInput({ attempts: 6, delay: 60 });
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    if (state.pendingSelectedText) {
+      focusSideChatInput({ attempts: 6, delay: 60 });
     }
   });
 }
