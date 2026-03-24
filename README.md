@@ -22,6 +22,12 @@ SideChat solves that by giving you a scratch-space beside ChatGPT:
 
 ## What SideChat Does
 
+
+
+https://github.com/user-attachments/assets/e27bf673-7ece-4be5-8bdd-46037cc3eed1
+
+
+
 - Reads the current ChatGPT conversation from the page
 - Opens a Chrome side panel for an isolated side conversation
 - Sends your side question to OpenAI or Anthropic using your own API key
