@@ -22,10 +22,11 @@ SideChat solves that by giving you a scratch-space beside ChatGPT:
 
 ## What SideChat Does
 
-
-
-https://github.com/user-attachments/assets/e27bf673-7ece-4be5-8bdd-46037cc3eed1
-
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/e27bf673-7ece-4be5-8bdd-46037cc3eed1" controls>
+    Your browser does not support the video tag.
+  </video>
+</div>
 
 
 - Reads the current ChatGPT conversation from the page
