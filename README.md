@@ -53,7 +53,7 @@ The extension runs only on `chatgpt.com` and `chat.openai.com`.
 1. Open `chrome://extensions`
 2. Enable `Developer mode`
 3. Click `Load unpacked`
-4. Select this project folder: `/Users/maghilnan/Projects/side-chat`
+4. Select this project folder
 
 After making code changes, refresh the extension from the extensions page.
 
